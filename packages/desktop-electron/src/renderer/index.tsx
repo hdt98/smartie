@@ -8,8 +8,8 @@ import {
   PlatformProvider,
   ServerConnection,
   useCommand,
-} from "@opencode-ai/app"
-import { Splash } from "@opencode-ai/ui/logo"
+} from "@smartie-code/app"
+import { Splash } from "@smartie-code/ui/logo"
 import type { AsyncStorage } from "@solid-primitives/storage"
 import { type Accessor, createResource, type JSX, onCleanup, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"

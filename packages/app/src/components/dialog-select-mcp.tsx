@@ -1,9 +1,9 @@
 import { Component, createMemo, createSignal, Show } from "solid-js"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
-import { Dialog } from "@opencode-ai/ui/dialog"
-import { List } from "@opencode-ai/ui/list"
-import { Switch } from "@opencode-ai/ui/switch"
+import { Dialog } from "@smartie-code/ui/dialog"
+import { List } from "@smartie-code/ui/list"
+import { Switch } from "@smartie-code/ui/switch"
 import { useLanguage } from "@/context/language"
 
 const statusLabels = {
