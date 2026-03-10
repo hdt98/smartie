@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
 import { $ } from "bun"
-import { createOpencode } from "@opencode-ai/sdk/v2"
+import { createOpencode } from "@smartie-code/sdk/v2"
 import { parseArgs } from "util"
-import { Script } from "@opencode-ai/script"
+import { Script } from "@smartie-code/script"
 
 type Release = {
   tag_name: string
@@ -143,7 +143,7 @@ async function summarizeCommit(opencode: Awaited<ReturnType<typeof createOpencod
     .prompt(
       {
         sessionID: session.data!.id,
-        model: { providerID: "opencode", modelID: "claude-sonnet-4-5" },
+        model: { providerID: "smartie", modelID: "claude-sonnet-4-5" },
         tools: {
           "*": false,
         },

@@ -1,12 +1,12 @@
 {
-  "name": "@opencode-ai/desktop-electron",
+  "name": "@smartie-code/desktop-electron",
   "private": true,
   "version": "1.2.24",
   "type": "module",
   "license": "MIT",
   "homepage": "https://opencode.ai",
   "author": {
-    "name": "OpenCode",
+    "name": "Smartie",
     "email": "hello@opencode.ai"
   },
   "scripts": {
@@ -24,8 +24,8 @@
   },
   "main": "./out/main/index.js",
   "dependencies": {
-    "@opencode-ai/app": "workspace:*",
-    "@opencode-ai/ui": "workspace:*",
+    "@smartie-code/app": "workspace:*",
+    "@smartie-code/ui": "workspace:*",
     "@solid-primitives/i18n": "2.2.1",
     "@solid-primitives/storage": "catalog:",
     "@solidjs/meta": "catalog:",

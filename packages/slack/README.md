@@ -1,4 +1,4 @@
-# @opencode-ai/slack
+# @smartie-code/slack
 
 Slack bot integration for opencode that creates threaded conversations.
 

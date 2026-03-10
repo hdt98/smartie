@@ -94,7 +94,7 @@ async function seedStorage(page: Page, input: { directory: string; extra?: strin
     localStorage.setItem(
       "opencode.global.dat:model",
       JSON.stringify({
-        recent: [{ providerID: "opencode", modelID: "big-pickle" }],
+        recent: [{ providerID: "smartie", modelID: "big-pickle" }],
         user: [],
         variant: {},
       }),

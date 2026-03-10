@@ -32,7 +32,7 @@ export const iconNames = [
   "perplexity",
   "ovhcloud",
   "openrouter",
-  "opencode",
+  "smartie",
   "opencode-go",
   "openai",
   "ollama-cloud",

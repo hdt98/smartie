@@ -1,5 +1,5 @@
 {
-  "name": "@opencode-ai/function",
+  "name": "@smartie-code/function",
   "version": "1.2.24",
   "$schema": "https://json.schemastore.org/package.json",
   "private": true,

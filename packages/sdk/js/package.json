@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@opencode-ai/sdk",
+  "name": "@smartie-code/sdk",
   "version": "1.2.24",
   "type": "module",
   "license": "MIT",

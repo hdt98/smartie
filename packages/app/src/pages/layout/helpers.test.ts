@@ -7,7 +7,7 @@ import {
   parseNewSessionDeepLink,
 } from "./deep-links"
 import { displayName, errorMessage, getDraggableId, syncWorkspaceOrder, workspaceKey } from "./helpers"
-import { type Session } from "@opencode-ai/sdk/v2/client"
+import { type Session } from "@smartie-code/sdk/v2/client"
 import { hasProjectPermissions, latestRootSession } from "./helpers"
 
 const session = (input: Partial<Session> & Pick<Session, "id" | "directory">) =>
@@ -85,10 +85,10 @@ describe("layout deep links", () => {
 
   test("drains global deep links once", () => {
     const target = {
-      __OPENCODE__: {
+      __SMARTIE__: {
         deepLinks: ["opencode://open-project?directory=/a"],
       },
-    } as unknown as Window & { __OPENCODE__?: { deepLinks?: string[] } }
+    } as unknown as Window & { __SMARTIE__?: { deepLinks?: string[] } }
 
     expect(drainPendingDeepLinks(target)).toEqual(["opencode://open-project?directory=/a"])
     expect(drainPendingDeepLinks(target)).toEqual([])

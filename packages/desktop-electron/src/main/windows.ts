@@ -37,7 +37,7 @@ export function createMainWindow(globals: Globals) {
     width: state.width,
     height: state.height,
     show: true,
-    title: "OpenCode",
+    title: "Smartie",
     icon: iconPath(),
     ...(process.platform === "darwin"
       ? {
@@ -122,7 +122,7 @@ function injectGlobals(win: BrowserWindow, globals: Globals) {
       deepLinks: Array.isArray(deepLinks) ? deepLinks.splice(0) : deepLinks,
     }
     void win.webContents.executeJavaScript(
-      `window.__OPENCODE__ = Object.assign(window.__OPENCODE__ ?? {}, ${JSON.stringify(data)})`,
+      `window.__SMARTIE__ = Object.assign(window.__SMARTIE__ ?? {}, ${JSON.stringify(data)})`,
     )
   })
 }

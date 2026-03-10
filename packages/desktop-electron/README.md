@@ -1,6 +1,6 @@
-# OpenCode Desktop
+# Smartie Desktop
 
-Native OpenCode desktop app, built with Tauri v2.
+Native Smartie desktop app, built with Tauri v2.
 
 ## Development
 

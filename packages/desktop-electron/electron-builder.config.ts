@@ -1,7 +1,7 @@
 import type { Configuration } from "electron-builder"
 
 const channel = (() => {
-  const raw = process.env.OPENCODE_CHANNEL
+  const raw = process.env.SMARTIE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
   return "dev"
 })()
@@ -39,8 +39,8 @@ const getBase = (): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "OpenCode",
-    schemes: ["opencode"],
+    name: "Smartie",
+    schemes: ["smartie"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
@@ -66,17 +66,17 @@ function getConfig() {
     case "dev": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.dev",
-        productName: "OpenCode Dev",
+        appId: "ai.smartie.desktop.dev",
+        productName: "Smartie Dev",
         rpm: { packageName: "opencode-dev" },
       }
     }
     case "beta": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.beta",
-        productName: "OpenCode Beta",
-        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
+        appId: "ai.smartie.desktop.beta",
+        productName: "Smartie Beta",
+        protocols: { name: "Smartie Beta", schemes: ["smartie"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
         rpm: { packageName: "opencode-beta" },
       }
@@ -84,11 +84,11 @@ function getConfig() {
     case "prod": {
       return {
         ...base,
-        appId: "ai.opencode.desktop",
-        productName: "OpenCode",
-        protocols: { name: "OpenCode", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
-        rpm: { packageName: "opencode" },
+        appId: "ai.smartie.desktop",
+        productName: "Smartie",
+        protocols: { name: "Smartie", schemes: ["smartie"] },
+        publish: { provider: "github", owner: "anomalyco", repo: "smartie", channel: "latest" },
+        rpm: { packageName: "smartie" },
       }
     }
   }

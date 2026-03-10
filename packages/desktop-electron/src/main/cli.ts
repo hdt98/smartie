@@ -11,8 +11,8 @@ import treeKill from "tree-kill"
 import { WSL_ENABLED_KEY } from "./constants"
 import { store } from "./store"
 
-const CLI_INSTALL_DIR = ".opencode/bin"
-const CLI_BINARY_NAME = "opencode"
+const CLI_INSTALL_DIR = ".smartie/bin"
+const CLI_BINARY_NAME = "smartie"
 
 export type ServerConfig = {
   hostname?: string
@@ -122,8 +122,8 @@ export function syncCli() {
 export function serve(hostname: string, port: number, password: string) {
   const args = `--print-logs --log-level WARN serve --hostname ${hostname} --port ${port}`
   const env = {
-    OPENCODE_SERVER_USERNAME: "opencode",
-    OPENCODE_SERVER_PASSWORD: password,
+    SMARTIE_SERVER_USERNAME: "smartie",
+    SMARTIE_SERVER_PASSWORD: password,
   }
 
   return spawnCommand(args, env)
@@ -136,9 +136,9 @@ export function spawnCommand(args: string, extraEnv: Record<string, string>) {
   )
   const envs = {
     ...base,
-    OPENCODE_EXPERIMENTAL_ICON_DISCOVERY: "true",
-    OPENCODE_EXPERIMENTAL_FILEWATCHER: "true",
-    OPENCODE_CLIENT: "desktop",
+    SMARTIE_EXPERIMENTAL_ICON_DISCOVERY: "true",
+    SMARTIE_EXPERIMENTAL_FILEWATCHER: "true",
+    SMARTIE_CLIENT: "desktop",
     XDG_STATE_HOME: app.getPath("userData"),
     ...extraEnv,
   }
@@ -215,7 +215,7 @@ function buildCommand(args: string, env: Record<string, string>) {
     const version = app.getVersion()
     const script = [
       "set -e",
-      'BIN="$HOME/.opencode/bin/opencode"',
+      'BIN="$HOME/.smartie/bin/opencode"',
       'if [ ! -x "$BIN" ]; then',
       `  curl -fsSL https://opencode.ai/install | bash -s -- --version ${shellEscape(version)} --no-modify-path`,
       "fi",
