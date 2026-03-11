@@ -320,34 +320,34 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
                 "2",
                 "--json",
               ],
-              input.directory,
+              state.root,
             )
             if (bead.code !== 0) {
-              await cleanup(state, input.directory, "fallback after bead creation failure")
+              await cleanup(state, state.root, "fallback after bead creation failure")
               return fallback("bead creation", reason(bead))
             }
             const id = beadId(bead.stdout)
             if (!id) {
-              await cleanup(state, input.directory, "fallback after bead creation failure")
+              await cleanup(state, state.root, "fallback after bead creation failure")
               return fallback("bead creation", "bead id missing from bd create output")
             }
             created.push(id)
           }
 
           if (!created.length) {
-            await cleanup(state, input.directory, "fallback after bead creation failure")
+            await cleanup(state, state.root, "fallback after bead creation failure")
             return fallback("bead creation", "no bead ids were created")
           }
 
-          const makeConvoy = await run(["gt", "convoy", "create", args.goal, created[0]!], input.directory)
+          const makeConvoy = await run(["gt", "convoy", "create", args.goal, created[0]!], state.root)
           if (makeConvoy.code !== 0) {
-            await cleanup(state, input.directory, "fallback after convoy creation failure")
+            await cleanup(state, state.root, "fallback after convoy creation failure")
             return fallback("convoy creation", reason(makeConvoy))
           }
 
           const convoyID = convoy(makeConvoy.stdout)
           if (!convoyID) {
-            await cleanup(state, input.directory, "fallback after convoy creation failure")
+            await cleanup(state, state.root, "fallback after convoy creation failure")
             return fallback("convoy creation", "convoy id missing from gt convoy create output")
           }
           state.convoy = convoyID
@@ -355,20 +355,20 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
           await write(state, "active")
 
           if (created.length > 1) {
-            const add = await run(["gt", "convoy", "add", convoyID, ...created.slice(1)], input.directory)
+            const add = await run(["gt", "convoy", "add", convoyID, ...created.slice(1)], state.root)
             if (add.code !== 0) {
-              await cleanup(state, input.directory, "fallback after convoy add failure")
+              await cleanup(state, state.root, "fallback after convoy add failure")
               return fallback("convoy add", reason(add))
             }
           }
 
           const dispatch = await run(
-            ["gt", "sling", ...created, state.rig, "--no-convoy", "--max-concurrent", String(created.length)],
-            input.directory,
+            ["gt", "mayor", "dispatch", "--convoy", convoyID, "--rig", state.rig, "--request", state.id, "--root", state.root],
+            state.root,
           )
           if (dispatch.code !== 0) {
-            await cleanup(state, input.directory, "fallback after dispatch failure")
-            return fallback("dispatch", reason(dispatch))
+            await cleanup(state, state.root, "fallback after mayor dispatch failure")
+            return fallback("mayor dispatch", reason(dispatch))
           }
 
           return [
@@ -379,7 +379,7 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             `Cleanup metadata: ${state.meta}`,
             `Reason: ${args.reason}`,
             created.length ? `Beads: ${created.join(", ")}` : "Beads: created",
-            `Dispatched convoy ${convoyID} to ${state.rig}.`,
+            `Dispatched convoy ${convoyID} to Mayor for rig ${state.rig}.`,
           ].join("\n")
         },
       }),

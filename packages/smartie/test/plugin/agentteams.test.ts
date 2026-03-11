@@ -121,20 +121,12 @@ async function setup() {
       "  echo 'convoy add ok'",
       "  exit 0",
       "fi",
-      "if [[ \"${1:-}\" == \"sling\" ]]; then",
-      "  if [[ \"${GT_FAIL:-}\" == \"dispatch\" ]]; then",
-      "    echo 'dispatch failed' >&2",
-      "    exit 1",
-      "  fi",
-      "  echo 'dispatch ok'",
-      "  exit 0",
-      "fi",
       "if [[ \"${1:-}\" == \"mayor\" && \"${2:-}\" == \"dispatch\" ]]; then",
       "  if [[ \"${GT_FAIL:-}\" == \"mayor\" ]]; then",
       "    echo 'mayor unavailable' >&2",
-        "    exit 1",
+      "    exit 1",
       "  fi",
-      "  echo 'dispatch ok'",
+      "  echo 'mayor dispatch ok'",
       "  exit 0",
       "fi",
       "if [[ \"${1:-}\" == \"prime\" ]]; then",
@@ -221,13 +213,13 @@ describe("plugin.agentteams", () => {
         expect(out.some((line) => line.includes("bd create --title Refactor parser"))).toBe(true)
         expect(out.some((line) => line === "gt convoy create Refactor the parser stack bd-team.1")).toBe(true)
         expect(out.some((line) => line === "gt convoy add hq-team.1 bd-team.2")).toBe(true)
-        expect(out.some((line) => line === `gt sling bd-team.1 bd-team.2 ${rid} --no-convoy --max-concurrent 2`)).toBe(true)
+        expect(out.some((line) => line === `gt mayor dispatch --convoy hq-team.1 --rig ${rid} --request ${id} --root ${fx.dir}`)).toBe(true)
         expect(result.output).toContain("Created Agent Team convoy hq-team.1.")
         expect(result.output).toContain(`Request: ${id}`)
         expect(result.output).toContain(`Rig: ${rid} (git)`)
         expect(result.output).toContain(`Cleanup metadata: ${meta}`)
         expect(result.output).toContain("Beads: bd-team.1, bd-team.2")
-        expect(result.output).toContain(`Dispatched convoy hq-team.1 to ${rid}.`)
+        expect(result.output).toContain(`Dispatched convoy hq-team.1 to Mayor for rig ${rid}.`)
       },
     })
   })
@@ -369,15 +361,16 @@ describe("plugin.agentteams", () => {
     })
   })
 
-  test("dispatch failure falls back to single-session execution", async () => {
+  test("mayor dispatch failure falls back to single-session execution", async () => {
     process.env["SMARTIE_AGENT_TEAMS"] = "1"
-    process.env["GT_FAIL"] = "dispatch"
+    process.env["GT_FAIL"] = "mayor"
     await using fx = await setup()
     await Instance.provide({
       directory: fx.dir,
       fn: async () => {
         const tool = await teamTool()
         const rid = requestrig({ session: ctx.sessionID, call: ctx.callID, target: fx.dir })
+        const id = requestid({ session: ctx.sessionID, call: ctx.callID, target: fx.dir })
         const result = await tool.execute(
           {
             goal: "Split the migration work",
@@ -387,9 +380,9 @@ describe("plugin.agentteams", () => {
           ctx as any,
         )
         const out = await lines(fx.log)
-        expect(out.some((line) => line === `gt sling bd-team.1 ${rid} --no-convoy --max-concurrent 1`)).toBe(true)
+        expect(out.some((line) => line === `gt mayor dispatch --convoy hq-team.1 --rig ${rid} --request ${id} --root ${fx.dir}`)).toBe(true)
         expect(out.some((line) => line === `gt rig remove ${rid}`)).toBe(true)
-        expect(result.output).toContain("Agent Teams fallback: dispatch failed.")
+        expect(result.output).toContain("Agent Teams fallback: mayor dispatch failed.")
         expect(result.output).toContain("Continue in the current session")
       },
     })

@@ -21,6 +21,9 @@ type BeadStatus = {
 type ConvoyState = {
   id: string
   beads: BeadStatus[]
+  rig?: string
+  root: string
+  request?: string
 }
 
 const MAX_RETRIES = 3
@@ -78,23 +81,16 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
     return { ok: false, branch, error: reason(fallback) }
   }
 
-  async function spawnPolecat(beadId: string, branch: string, cwd: string): Promise<{ ok: boolean; error?: string }> {
-    const sling = await run(
-      [
-        "gt",
-        "sling",
-        "create",
-        "--bead",
-        beadId,
-        "--branch",
-        branch,
-        "--cmd",
-        "smartie run",
-        "--env",
-        "SMARTIE_AGENT_TEAMS=0",
-      ],
-      cwd,
-    )
+  async function spawnPolecat(
+    beadId: string,
+    branch: string,
+    cwd: string,
+    rig?: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const cmd = ["gt", "sling", "create"]
+    if (rig) cmd.push(rig)
+    cmd.push("--bead", beadId, "--branch", branch, "--cmd", "smartie run", "--env", "SMARTIE_AGENT_TEAMS=0")
+    const sling = await run(cmd, cwd)
     if (sling.code !== 0) return { ok: false, error: reason(sling) }
     return { ok: true }
   }
@@ -103,12 +99,12 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
     await run(["gt", "bead", "update", beadId, "--status", status], cwd)
   }
 
-  async function dispatchBead(bead: BeadStatus, cwd: string): Promise<string | undefined> {
+  async function dispatchBead(bead: BeadStatus, cwd: string, rig?: string): Promise<string | undefined> {
     const br = await createBranch(bead.id, cwd)
     if (!br.ok) return `Branch creation failed for ${bead.id}: ${br.error}`
     bead.branch = br.branch
 
-    const spawn = await spawnPolecat(bead.id, br.branch, cwd)
+    const spawn = await spawnPolecat(bead.id, br.branch, cwd, rig)
     if (!spawn.ok) return `Polecat spawn failed for ${bead.id}: ${spawn.error}`
 
     bead.status = "running"
@@ -123,9 +119,18 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
           "Dispatch a Convoy: create isolated git branches per Bead, spawn Polecats via gt sling, and track progress. Each Polecat runs smartie headless with SMARTIE_AGENT_TEAMS=0. Failed Polecats are retried up to 3 times.",
         args: {
           convoy_id: tool.schema.string().describe("The convoy ID to dispatch."),
+          rig: tool.schema.string().optional().describe("Request rig name for this convoy."),
+          root: tool.schema.string().optional().describe("Request rig root directory."),
+          request_id: tool.schema.string().optional().describe("Request ID for metadata linkage."),
         },
         async execute(args, ctx) {
-          const beadList = await run(["gt", "convoy", "beads", args.convoy_id], input.directory)
+          if (args.rig) {
+            const check = await run(["gt", "rig", "status", args.rig], input.directory)
+            if (check.code !== 0) return `Dispatch failed: request rig ${args.rig} is unavailable. ${reason(check)}`
+          }
+
+          const root = args.root || input.directory
+          const beadList = await run(["gt", "convoy", "beads", args.convoy_id], root)
           if (beadList.code !== 0) return `Dispatch failed: could not list beads for convoy ${args.convoy_id}. ${reason(beadList)}`
 
           const ids = beadList.stdout
@@ -136,17 +141,20 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
 
           const state: ConvoyState = {
             id: args.convoy_id,
+            rig: args.rig,
+            root,
+            request: args.request_id,
             beads: ids.map((id) => ({ id, branch: "", attempts: 0, status: "pending" as const, merged: false, conflict: false })),
           }
           convoys.set(args.convoy_id, state)
 
           const errors: string[] = []
           for (const bead of state.beads) {
-            const err = await dispatchBead(bead, input.directory)
+            const err = await dispatchBead(bead, state.root, state.rig)
             if (err) {
               bead.status = "failed"
               bead.attempts = 1
-              await markBead(bead.id, "failed", input.directory)
+              await markBead(bead.id, "failed", state.root)
               errors.push(err)
             }
           }
@@ -178,17 +186,17 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
 
           if (args.success) {
             bead.status = "done"
-            await markBead(bead.id, "closed", input.directory)
+            await markBead(bead.id, "closed", state.root)
           } else {
             if (bead.attempts < MAX_RETRIES) {
-              const err = await dispatchBead(bead, input.directory)
+              const err = await dispatchBead(bead, state.root, state.rig)
               if (err) {
                 bead.status = "failed"
-                await markBead(bead.id, "failed", input.directory)
+                await markBead(bead.id, "failed", state.root)
               }
             } else {
               bead.status = "failed"
-              await markBead(bead.id, "failed", input.directory)
+              await markBead(bead.id, "failed", state.root)
             }
           }
 
@@ -221,7 +229,7 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
           const pending = state.beads.filter((b) => b.status === "running")
           if (pending.length) return `Cannot merge: ${pending.length} bead(s) still running in convoy ${args.convoy_id}.`
 
-          const mainBranch = await run(["git", "rev-parse", "--abbrev-ref", "HEAD"], input.directory)
+          const mainBranch = await run(["git", "rev-parse", "--abbrev-ref", "HEAD"], state.root)
           const target = mainBranch.stdout || "main"
 
           const merged: string[] = []
@@ -236,9 +244,9 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
             if (bead.status !== "done") continue
             if (!bead.branch) continue
 
-            const merge = await run(["git", "merge", "--no-edit", bead.branch], input.directory)
+            const merge = await run(["git", "merge", "--no-edit", bead.branch], state.root)
             if (merge.code !== 0) {
-              await run(["git", "merge", "--abort"], input.directory)
+              await run(["git", "merge", "--abort"], state.root)
               bead.conflict = true
               conflicts.push(bead.id)
               continue
@@ -247,10 +255,10 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
             bead.merged = true
             merged.push(bead.id)
 
-            await run(["git", "branch", "-d", bead.branch], input.directory)
+            await run(["git", "branch", "-d", bead.branch], state.root)
           }
 
-          await run(["gt", "convoy", "close", args.convoy_id], input.directory)
+          await run(["gt", "convoy", "close", args.convoy_id], state.root)
 
           const summary = [
             `Convoy ${args.convoy_id} merge complete.`,
@@ -276,7 +284,7 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
               "--total",
               String(state.beads.length),
             ],
-            input.directory,
+            state.root,
           )
           if (signal.code !== 0) summary.push(`Warning: lead session signal failed: ${reason(signal)}`)
 

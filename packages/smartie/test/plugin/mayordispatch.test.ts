@@ -58,6 +58,15 @@ async function setup(opts?: { failCmd?: string; beads?: string[] }) {
       "  exit 0",
       "fi",
       "",
+      'if [[ "${1:-}" == "rig" && "${2:-}" == "status" ]]; then',
+      `  if [[ "\${GT_FAIL:-}" == "rig-status" ]]; then`,
+      "    echo 'rig missing' >&2",
+      "    exit 1",
+      "  fi",
+      "  echo 'rig status ok'",
+      "  exit 0",
+      "fi",
+      "",
       'if [[ "${1:-}" == "sling" && "${2:-}" == "create" ]]; then',
       `  if [[ "\${GT_FAIL:-}" == "sling" ]]; then`,
       "    echo 'sling failed' >&2",
@@ -214,6 +223,19 @@ describe("plugin.mayordispatch", () => {
 
         expect(result.output).toContain("Dispatch failed")
         expect(result.output).toContain("could not list beads")
+      },
+    })
+  })
+
+  test("missing request rig rejects dispatch cleanly", async () => {
+    process.env.GT_FAIL = "rig-status"
+    await using fx = await setup()
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        const tool = await dispatchTool()
+        const result = await tool.execute({ convoy_id: "hq-bad", rig: "smartie-rq-x", root: fx.dir }, ctx as any)
+        expect(result.output).toContain("request rig smartie-rq-x is unavailable")
       },
     })
   })
