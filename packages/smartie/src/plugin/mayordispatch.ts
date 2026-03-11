@@ -14,6 +14,8 @@ type BeadStatus = {
   branch: string
   attempts: number
   status: "pending" | "running" | "done" | "failed"
+  merged: boolean
+  conflict: boolean
 }
 
 type ConvoyState = {
@@ -134,7 +136,7 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
 
           const state: ConvoyState = {
             id: args.convoy_id,
-            beads: ids.map((id) => ({ id, branch: "", attempts: 0, status: "pending" as const })),
+            beads: ids.map((id) => ({ id, branch: "", attempts: 0, status: "pending" as const, merged: false, conflict: false })),
           }
           convoys.set(args.convoy_id, state)
 
@@ -203,6 +205,82 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
                   ? `Bead ${args.bead_id} retrying (attempt ${bead.attempts}/${MAX_RETRIES}).`
                   : `Bead ${args.bead_id} done.`,
           ].join("\n")
+        },
+      }),
+
+      mayor_convoy_merge: tool({
+        description:
+          "Merge completed Bead branches back to the working branch, close the Convoy, and signal the lead session. Merges in bead creation order. Conflict branches are preserved for manual resolution. Successful branches are cleaned up.",
+        args: {
+          convoy_id: tool.schema.string().describe("The convoy ID to merge."),
+        },
+        async execute(args, _ctx) {
+          const state = convoys.get(args.convoy_id)
+          if (!state) return `Unknown convoy: ${args.convoy_id}`
+
+          const pending = state.beads.filter((b) => b.status === "running")
+          if (pending.length) return `Cannot merge: ${pending.length} bead(s) still running in convoy ${args.convoy_id}.`
+
+          const mainBranch = await run(["git", "rev-parse", "--abbrev-ref", "HEAD"], input.directory)
+          const target = mainBranch.stdout || "main"
+
+          const merged: string[] = []
+          const conflicts: string[] = []
+          const failed: string[] = []
+
+          for (const bead of state.beads) {
+            if (bead.status === "failed") {
+              failed.push(bead.id)
+              continue
+            }
+            if (bead.status !== "done") continue
+            if (!bead.branch) continue
+
+            const merge = await run(["git", "merge", "--no-edit", bead.branch], input.directory)
+            if (merge.code !== 0) {
+              await run(["git", "merge", "--abort"], input.directory)
+              bead.conflict = true
+              conflicts.push(bead.id)
+              continue
+            }
+
+            bead.merged = true
+            merged.push(bead.id)
+
+            await run(["git", "branch", "-d", bead.branch], input.directory)
+          }
+
+          await run(["gt", "convoy", "close", args.convoy_id], input.directory)
+
+          const summary = [
+            `Convoy ${args.convoy_id} merge complete.`,
+            `Merged: ${merged.length}/${state.beads.length} beads.`,
+          ]
+          if (merged.length) summary.push(`Succeeded: ${merged.join(", ")}`)
+          if (conflicts.length) summary.push(`Conflicts (branches preserved): ${conflicts.join(", ")}`)
+          if (failed.length) summary.push(`Failed (branches preserved): ${failed.join(", ")}`)
+
+          const signal = await run(
+            [
+              "gt",
+              "signal",
+              "convoy-complete",
+              "--convoy",
+              args.convoy_id,
+              "--merged",
+              String(merged.length),
+              "--conflicts",
+              String(conflicts.length),
+              "--failed",
+              String(failed.length),
+              "--total",
+              String(state.beads.length),
+            ],
+            input.directory,
+          )
+          if (signal.code !== 0) summary.push(`Warning: lead session signal failed: ${reason(signal)}`)
+
+          return summary.join("\n")
         },
       }),
     },
