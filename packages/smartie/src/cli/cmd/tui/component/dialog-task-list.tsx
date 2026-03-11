@@ -28,15 +28,25 @@ export function DialogTaskList(): JSX.Element {
   const [team, setTeam] = createSignal(AgentTeamsTUI.getActiveTeam())
 
   const unsub1 = Bus.subscribe(AgentTeamsTUI.Event.TeammateStatus, () => {
-    setTeam({ ...AgentTeamsTUI.getActiveTeam()! })
+    const next = AgentTeamsTUI.getActiveTeam()
+    if (!next) return
+    setTeam({ ...next })
   })
   const unsub2 = Bus.subscribe(AgentTeamsTUI.Event.ConvoyComplete, () => {
-    setTeam({ ...AgentTeamsTUI.getActiveTeam()! })
+    const next = AgentTeamsTUI.getActiveTeam()
+    if (!next) return
+    setTeam({ ...next })
+  })
+  const unsub3 = Bus.subscribe(AgentTeamsTUI.Event.TeamFormed, () => {
+    const next = AgentTeamsTUI.getActiveTeam()
+    if (!next) return
+    setTeam({ ...next })
   })
 
   onCleanup(() => {
     unsub1()
     unsub2()
+    unsub3()
   })
 
   return (
@@ -57,7 +67,7 @@ export function DialogTaskList(): JSX.Element {
             {/* Title */}
             <box height={1}>
               <text
-                content={`Task List — Convoy ${t().convoyID}`}
+                content={`Task List — Convoy ${t().convoyID} (${t().rig || "pending rig"})`}
                 attributes={new TextAttributes({ bold: true })}
               />
             </box>

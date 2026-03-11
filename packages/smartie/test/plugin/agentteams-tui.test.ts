@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
+import z from "zod"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Bus } from "../../src/bus"
+import { BusEvent } from "../../src/bus/bus-event"
 import { AgentTeamsTUI, createSplitPanes, closePanes, type TeammateInfo } from "../../src/plugin/agentteams-tui"
+import { AgentTeamsTUIPlugin } from "../../src/plugin/agentteams-tui"
 
 const env = { ...process.env }
 
@@ -27,6 +30,13 @@ function makeTeammates(count: number): TeammateInfo[] {
     status: "pending" as const,
   }))
 }
+
+const PartUpdated = BusEvent.define(
+  "session.message.part.updated",
+  z.object({
+    part: z.any(),
+  }),
+)
 
 describe("agentteams-tui.team-formation", () => {
   test("TeamFormed event populates active team state", async () => {
@@ -414,5 +424,85 @@ describe("agentteams-tui.convoy-completion", () => {
     AgentTeamsTUI.clearTeam()
     expect(AgentTeamsTUI.getActiveTeam()).toBeNull()
     expect(AgentTeamsTUI.getSelectedIndex()).toBe(0)
+  })
+})
+
+describe("agentteams-tui.request-rig-lifecycle", () => {
+  test("agent_team_create completion hydrates request rig details", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    const tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await AgentTeamsTUIPlugin({
+          directory: tmp.path,
+        } as any)
+
+        await Bus.publish(PartUpdated, {
+          part: {
+            type: "tool",
+            tool: "agent_team_create",
+            state: {
+              status: "completed",
+              input: {
+                goal: "Refactor service",
+              },
+              output: [
+                "Created Agent Team convoy hq-team.9.",
+                "Request: rq-ses-team-call-team-a1b2c3d4",
+                "Rig: smartie-rq-ses-team-call-team-a1b2c3d4 (git)",
+                `Source: ${tmp.path}`,
+                `Cleanup metadata: ${tmp.path}/meta.json`,
+                "Beads: bd-t.1, bd-t.2",
+                "Dispatched convoy hq-team.9 to Mayor for rig smartie-rq-ses-team-call-team-a1b2c3d4.",
+              ].join("\n"),
+            },
+          },
+        })
+
+        const team = AgentTeamsTUI.getActiveTeam()
+        expect(team).not.toBeNull()
+        expect(team!.convoyID).toBe("hq-team.9")
+        expect(team!.requestID).toBe("rq-ses-team-call-team-a1b2c3d4")
+        expect(team!.rig).toBe("smartie-rq-ses-team-call-team-a1b2c3d4")
+        expect(team!.source).toBe(tmp.path)
+        expect(team!.target).toBe(tmp.path)
+        expect(team!.phase).toBe("working")
+        expect(team!.goal).toBe("Refactor service")
+      },
+    })
+    await tmp[Symbol.asyncDispose]()
+  })
+
+  test("agent_team_create running emits request rig creating event", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    const tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await AgentTeamsTUIPlugin({
+          directory: tmp.path,
+        } as any)
+
+        let target = ""
+        const unsub = Bus.subscribe(AgentTeamsTUI.Event.RequestRig, (evt) => {
+          if (evt.properties.status !== "creating") return
+          target = evt.properties.target
+        })
+
+        await Bus.publish(PartUpdated, {
+          part: {
+            type: "tool",
+            tool: "agent_team_create",
+            state: {
+              status: "running",
+            },
+          },
+        })
+        unsub()
+        expect(target).toBe(tmp.path)
+      },
+    })
+    await tmp[Symbol.asyncDispose]()
   })
 })

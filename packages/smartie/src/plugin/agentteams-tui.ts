@@ -21,6 +21,11 @@ export type TeammateInfo = {
 
 export type TeamState = {
   convoyID: string
+  requestID?: string
+  rig?: string
+  source?: string
+  target?: string
+  cleanup?: string
   goal: string
   teammates: TeammateInfo[]
   phase: "forming" | "dispatching" | "working" | "complete"
@@ -35,6 +40,11 @@ export namespace AgentTeamsTUI {
       "agentteams.team.formed",
       z.object({
         convoyID: z.string(),
+        requestID: z.string().optional().default(""),
+        rig: z.string().optional().default(""),
+        source: z.string().optional().default(""),
+        target: z.string().optional().default(""),
+        cleanup: z.string().optional().default(""),
         goal: z.string(),
         teammates: z.array(
           z.object({
@@ -44,6 +54,16 @@ export namespace AgentTeamsTUI {
             status: z.enum(["pending", "working", "completed", "failed"]),
           }),
         ),
+      }),
+    ),
+    RequestRig: BusEvent.define(
+      "agentteams.request.rig",
+      z.object({
+        status: z.enum(["creating", "ready"]),
+        requestID: z.string(),
+        rig: z.string(),
+        source: z.string(),
+        target: z.string(),
       }),
     ),
     TeammateStatus: BusEvent.define(
@@ -68,6 +88,10 @@ export namespace AgentTeamsTUI {
       "agentteams.dispatching",
       z.object({
         convoyID: z.string(),
+        requestID: z.string(),
+        rig: z.string(),
+        target: z.string(),
+        source: z.string(),
       }),
     ),
   }
@@ -161,9 +185,11 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
 
   // Track dispatched convoys for polling
   const trackedConvoys = new Set<string>()
+  const roots = new Map<string, string>()
 
   async function pollConvoyStatus(convoyID: string) {
-    const result = await run(["gt", "convoy", "beads", convoyID], input.directory)
+    const root = roots.get(convoyID) ?? input.directory
+    const result = await run(["gt", "convoy", "beads", convoyID], root)
     if (result.code !== 0) return
 
     const ids = result.stdout
@@ -175,7 +201,7 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
     if (!team || team.convoyID !== convoyID) return
 
     for (const id of ids) {
-      const status = await run(["gt", "bead", "status", id], input.directory)
+      const status = await run(["gt", "bead", "status", id], root)
       if (status.code !== 0) continue
       const parsed = status.stdout.trim().toLowerCase()
       const teammate = team.teammates.find((t) => t.id === id)
@@ -213,7 +239,16 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
         total: team.teammates.length,
       })
       trackedConvoys.delete(convoyID)
+      roots.delete(convoyID)
     }
+  }
+
+  function line(text: string, prefix: string) {
+    return text
+      .split(/\r?\n/)
+      .find((item) => item.startsWith(prefix))
+      ?.slice(prefix.length)
+      .trim()
   }
 
   // Subscribe to agent_team_create tool completion to track convoys
@@ -223,42 +258,85 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
     const part = event.properties?.part
     if (!part || part.type !== "tool") return
     if (part.tool !== "agent_team_create") return
+    if (part.state?.status === "running") {
+      Bus.publish(AgentTeamsTUI.Event.RequestRig, {
+        status: "creating",
+        requestID: "",
+        rig: "",
+        source: "",
+        target: input.directory,
+      })
+      return
+    }
     if (part.state?.status !== "completed") return
 
     // Parse convoy ID from the tool output
     const output = typeof part.state?.output === "string" ? part.state.output : ""
     const convoyMatch = output.match(/convoy\s+(\S+)/i)
     if (!convoyMatch) return
-    const convoyID = convoyMatch[1]!
+    const convoyID = convoyMatch[1]!.replace(/[.,;:!?]+$/, "")
 
     // Parse bead IDs from output
     const beadMatch = output.match(/Beads:\s*(.+)/i)
     const beadIds = beadMatch ? beadMatch[1]!.split(",").map((b) => b.trim()).filter(Boolean) : []
+    const requestID = line(output, "Request:") ?? ""
+    const rigRaw = line(output, "Rig:") ?? ""
+    const rig = rigRaw.split(/\s+\(/)[0] ?? ""
+    const source = line(output, "Source:") ?? input.directory
+    const cleanup = line(output, "Cleanup metadata:") ?? ""
+    const goal = typeof part.state?.input?.goal === "string" ? part.state.input.goal : ""
 
     // Build team state
     const teamState: TeamState = {
       convoyID,
-      goal: "",
+      requestID,
+      rig,
+      source,
+      target: input.directory,
+      cleanup,
+      goal,
       teammates: beadIds.map((id) => ({
         id,
         description: id,
         branch: `bead_${id}`,
         status: "pending" as const,
       })),
-      phase: "working",
+      phase: "dispatching",
       merged: 0,
       conflicts: 0,
       failed: 0,
     }
 
+    roots.set(convoyID, source)
+
     // Set as active team
     AgentTeamsTUI.setActiveTeam(teamState)
 
+    Bus.publish(AgentTeamsTUI.Event.RequestRig, {
+      status: "ready",
+      requestID,
+      rig,
+      source,
+      target: input.directory,
+    })
     Bus.publish(AgentTeamsTUI.Event.TeamFormed, {
       convoyID,
-      goal: teamState.goal,
+      requestID,
+      rig,
+      source,
+      target: input.directory,
+      cleanup,
+      goal,
       teammates: teamState.teammates,
     })
+    Bus.publish(AgentTeamsTUI.Event.Dispatching, {
+      convoyID,
+      requestID,
+      rig,
+      target: input.directory,
+      source,
+    })
+    teamState.phase = "working"
 
     // Start polling
     trackedConvoys.add(convoyID)

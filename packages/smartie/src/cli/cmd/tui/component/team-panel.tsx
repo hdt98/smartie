@@ -39,6 +39,16 @@ export function TeamPanel(props: { width: number }): JSX.Element {
     if (!next) return
     setTeam({ ...next })
   })
+  const unsub5 = Bus.subscribe(AgentTeamsTUI.Event.Dispatching, () => {
+    const next = AgentTeamsTUI.getActiveTeam()
+    if (!next) return
+    setTeam({ ...next })
+  })
+  const unsub6 = Bus.subscribe(AgentTeamsTUI.Event.RequestRig, () => {
+    const next = AgentTeamsTUI.getActiveTeam()
+    if (!next) return
+    setTeam({ ...next })
+  })
   const unsub4 = AgentTeamsTUI.onSelected((_, idx) => {
     setSelected(idx)
   })
@@ -48,6 +58,8 @@ export function TeamPanel(props: { width: number }): JSX.Element {
     unsub2()
     unsub3()
     unsub4()
+    unsub5()
+    unsub6()
   })
 
   function statusColor(status: TeammateInfo["status"]): RGBA {
@@ -79,6 +91,24 @@ export function TeamPanel(props: { width: number }): JSX.Element {
           <box height={1}>
             <text
               content={`Convoy: ${t().convoyID}`}
+              attributes={new TextAttributes({ foreground: new RGBA(150, 150, 150, 255) })}
+            />
+          </box>
+          <box height={1}>
+            <text
+              content={`Rig: ${t().rig || "pending"}`}
+              attributes={new TextAttributes({ foreground: new RGBA(150, 150, 150, 255) })}
+            />
+          </box>
+          <box height={1}>
+            <text
+              content={`Target: ${t().target || "-"}`}
+              attributes={new TextAttributes({ foreground: new RGBA(150, 150, 150, 255) })}
+            />
+          </box>
+          <box height={1}>
+            <text
+              content={`Source: ${t().source || "-"}`}
               attributes={new TextAttributes({ foreground: new RGBA(150, 150, 150, 255) })}
             />
           </box>
