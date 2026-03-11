@@ -33,6 +33,7 @@ async function setup() {
   const home = path.join(tmp.path, "home")
   const bin = path.join(tmp.path, "bin")
   const gt = path.join(bin, "gt")
+  const bd = path.join(bin, "bd")
   const log = path.join(tmp.path, "gt.log")
   const count = path.join(tmp.path, "gt.count")
   await fs.mkdir(home, { recursive: true })
@@ -43,6 +44,18 @@ async function setup() {
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       "printf '%s\\n' \"$*\" >> \"$GT_LOG\"",
+      "self=$(basename \"$0\")",
+      "if [[ (\"$self\" == \"bd\" && \"${1:-}\" == \"create\") || (\"${1:-}\" == \"bd\" && \"${2:-}\" == \"create\") ]]; then",
+      "  if [[ \"${GT_FAIL:-}\" == \"bead\" ]]; then",
+      "    echo 'bead failed' >&2",
+      "    exit 1",
+      "  fi",
+      "  n=$(cat \"$GT_COUNT\" 2>/dev/null || echo 0)",
+      "  n=$((n+1))",
+      "  printf '%s' \"$n\" > \"$GT_COUNT\"",
+      "  echo \"{\\\"id\\\":\\\"bd-team.$n\\\"}\"",
+      "  exit 0",
+      "fi",
       "if [[ \"${1:-}\" == \"convoy\" && \"${2:-}\" == \"create\" ]]; then",
       "  if [[ \"${GT_FAIL:-}\" == \"convoy\" ]]; then",
       "    echo 'convoy failed' >&2",
@@ -51,21 +64,26 @@ async function setup() {
       "  echo 'hq-team.1'",
       "  exit 0",
       "fi",
-      "if [[ \"${1:-}\" == \"bead\" && \"${2:-}\" == \"create\" ]]; then",
-      "  if [[ \"${GT_FAIL:-}\" == \"bead\" ]]; then",
-      "    echo 'bead failed' >&2",
+      "if [[ \"${1:-}\" == \"convoy\" && \"${2:-}\" == \"add\" ]]; then",
+      "  if [[ \"${GT_FAIL:-}\" == \"convoy-add\" ]]; then",
+      "    echo 'convoy add failed' >&2",
       "    exit 1",
       "  fi",
-      "  n=$(cat \"$GT_COUNT\" 2>/dev/null || echo 0)",
-      "  n=$((n+1))",
-      "  printf '%s' \"$n\" > \"$GT_COUNT\"",
-      "  echo \"bd-team.$n\"",
+      "  echo 'convoy add ok'",
+      "  exit 0",
+      "fi",
+      "if [[ \"${1:-}\" == \"sling\" ]]; then",
+      "  if [[ \"${GT_FAIL:-}\" == \"dispatch\" ]]; then",
+      "    echo 'dispatch failed' >&2",
+      "    exit 1",
+      "  fi",
+      "  echo 'dispatch ok'",
       "  exit 0",
       "fi",
       "if [[ \"${1:-}\" == \"mayor\" && \"${2:-}\" == \"dispatch\" ]]; then",
       "  if [[ \"${GT_FAIL:-}\" == \"mayor\" ]]; then",
       "    echo 'mayor unavailable' >&2",
-      "    exit 1",
+        "    exit 1",
       "  fi",
       "  echo 'dispatch ok'",
       "  exit 0",
@@ -79,6 +97,8 @@ async function setup() {
     ].join("\n"),
   )
   await fs.chmod(gt, 0o755)
+  await fs.copyFile(gt, bd)
+  await fs.chmod(bd, 0o755)
   process.env.HOME = home
   process.env.PATH = `${bin}:${process.env.PATH ?? ""}`
   process.env.GT_LOG = log
@@ -138,13 +158,14 @@ describe("plugin.agentteams", () => {
         )
 
         const out = await lines(fx.log)
-        expect(out[0]).toBe("convoy create --session ses-team Refactor the parser stack")
-        expect(out[1]).toContain("bead create --convoy hq-team.1")
-        expect(out[2]).toContain("bead create --convoy hq-team.1")
-        expect(out[3]).toBe("mayor dispatch --convoy hq-team.1")
+        expect(out[0]).toContain("create --title Refactor lexer")
+        expect(out[1]).toContain("create --title Refactor parser")
+        expect(out[2]).toBe("convoy create Refactor the parser stack bd-team.1")
+        expect(out[3]).toBe("convoy add hq-team.1 bd-team.2")
+        expect(out[4]).toBe("sling bd-team.1 bd-team.2 smartie_product --no-convoy --max-concurrent 2")
         expect(result.output).toContain("Created Agent Team convoy hq-team.1.")
         expect(result.output).toContain("Beads: bd-team.1, bd-team.2")
-        expect(result.output).toContain("Dispatched convoy hq-team.1 to Mayor.")
+        expect(result.output).toContain("Dispatched convoy hq-team.1 to smartie_product.")
       },
     })
   })
@@ -189,17 +210,44 @@ describe("plugin.agentteams", () => {
         )
         const out = await lines(fx.log)
         expect(out).toEqual([
-          "convoy create --session ses-team Split the migration work",
-          "bead create --convoy hq-team.1 --description One --acceptance Done --targets a.ts",
+          "create --title One --description Acceptance: Done | Targets: a.ts --type task --priority 2 --json",
         ])
         expect(result.output).toContain("Agent Teams fallback: bead creation failed.")
       },
     })
   })
 
-  test("mayor dispatch failure falls back to single-session execution", async () => {
+  test("convoy add failure falls back to single-session execution", async () => {
     process.env["SMARTIE_AGENT_TEAMS"] = "1"
-    process.env["GT_FAIL"] = "mayor"
+    process.env["GT_FAIL"] = "convoy-add"
+    await using fx = await setup()
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        const tool = await teamTool()
+        const result = await tool.execute(
+          {
+            goal: "Split the migration work",
+            reason: "Work is parallelizable",
+            tasks: [
+              { description: "One", acceptance: "Done", targets: ["a.ts"] },
+              { description: "Two", acceptance: "Done", targets: ["b.ts"] },
+            ],
+          },
+          ctx as any,
+        )
+        const out = await lines(fx.log)
+        expect(out[2]).toBe("convoy create Split the migration work bd-team.1")
+        expect(out[3]).toBe("convoy add hq-team.1 bd-team.2")
+        expect(result.output).toContain("Agent Teams fallback: convoy add failed.")
+        expect(result.output).toContain("Continue in the current session")
+      },
+    })
+  })
+
+  test("dispatch failure falls back to single-session execution", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    process.env["GT_FAIL"] = "dispatch"
     await using fx = await setup()
     await Instance.provide({
       directory: fx.dir,
@@ -214,8 +262,8 @@ describe("plugin.agentteams", () => {
           ctx as any,
         )
         const out = await lines(fx.log)
-        expect(out[2]).toBe("mayor dispatch --convoy hq-team.1")
-        expect(result.output).toContain("Agent Teams fallback: mayor dispatch failed.")
+        expect(out[2]).toBe("sling bd-team.1 smartie_product --no-convoy --max-concurrent 1")
+        expect(result.output).toContain("Agent Teams fallback: dispatch failed.")
         expect(result.output).toContain("Continue in the current session")
       },
     })

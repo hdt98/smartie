@@ -60,6 +60,28 @@ function fallback(phase: string, reason: string) {
   ].join("\n")
 }
 
+function rig(cwd: string) {
+  const configured = process.env["SMARTIE_AGENT_TEAMS_RIG"]?.trim()
+  if (configured) return configured
+  const match = cwd.match(/\/gt\/([^/]+)\//)
+  return match?.[1] ?? "smartie_product"
+}
+
+function beadDescription(item: { acceptance: string; targets: string[] }) {
+  return `Acceptance: ${item.acceptance} | Targets: ${item.targets.join(", ")}`
+}
+
+function beadId(text: string) {
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed[0]?.id
+    if (parsed && typeof parsed === "object" && "id" in parsed) return String(parsed.id)
+  } catch {
+    // Fall back to plain text extraction for older/noisy command output.
+  }
+  return convoy(text)
+}
+
 export const AgentTeamsPlugin: Plugin = async (input) => {
   if (!enabled()) return {}
 
@@ -88,42 +110,53 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
         },
         async execute(args, ctx) {
           const created: string[] = []
-          const makeConvoy = await run(["gt", "convoy", "create", "--session", ctx.sessionID, args.goal], input.directory)
+          for (const item of args.tasks) {
+            const bead = await run(
+              [
+                "bd",
+                "create",
+                "--title",
+                item.description,
+                "--description",
+                beadDescription(item),
+                "--type",
+                "task",
+                "--priority",
+                "2",
+                "--json",
+              ],
+              input.directory,
+            )
+            if (bead.code !== 0) return fallback("bead creation", reason(bead))
+            const id = beadId(bead.stdout)
+            if (!id) return fallback("bead creation", "bead id missing from bd create output")
+            created.push(id)
+          }
+
+          if (!created.length) return fallback("bead creation", "no bead ids were created")
+
+          const makeConvoy = await run(["gt", "convoy", "create", args.goal, created[0]!], input.directory)
           if (makeConvoy.code !== 0) return fallback("convoy creation", reason(makeConvoy))
 
           const convoyID = convoy(makeConvoy.stdout)
           if (!convoyID) return fallback("convoy creation", "convoy id missing from gt convoy create output")
 
-          for (const item of args.tasks) {
-            const bead = await run(
-              [
-                "gt",
-                "bead",
-                "create",
-                "--convoy",
-                convoyID,
-                "--description",
-                item.description,
-                "--acceptance",
-                item.acceptance,
-                "--targets",
-                item.targets.join(","),
-              ],
-              input.directory,
-            )
-            if (bead.code !== 0) return fallback("bead creation", reason(bead))
-            const id = convoy(bead.stdout)
-            if (id) created.push(id)
+          if (created.length > 1) {
+            const add = await run(["gt", "convoy", "add", convoyID, ...created.slice(1)], input.directory)
+            if (add.code !== 0) return fallback("convoy add", reason(add))
           }
 
-          const dispatch = await run(["gt", "mayor", "dispatch", "--convoy", convoyID], input.directory)
-          if (dispatch.code !== 0) return fallback("mayor dispatch", reason(dispatch))
+          const dispatch = await run(
+            ["gt", "sling", ...created, rig(input.directory), "--no-convoy", "--max-concurrent", String(created.length)],
+            input.directory,
+          )
+          if (dispatch.code !== 0) return fallback("dispatch", reason(dispatch))
 
           return [
             `Created Agent Team convoy ${convoyID}.`,
             `Reason: ${args.reason}`,
             created.length ? `Beads: ${created.join(", ")}` : "Beads: created",
-            `Dispatched convoy ${convoyID} to Mayor.`,
+            `Dispatched convoy ${convoyID} to ${rig(input.directory)}.`,
           ].join("\n")
         },
       }),
