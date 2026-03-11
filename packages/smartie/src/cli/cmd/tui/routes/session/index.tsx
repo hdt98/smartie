@@ -62,6 +62,9 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
+import { TeamPanel } from "@tui/component/team-panel"
+import { DialogTaskList } from "@tui/component/dialog-task-list"
+import { AgentTeamsTUI } from "@/plugin/agentteams-tui"
 import { Flag } from "@/flag/flag"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import parsers from "../../../../../../parsers-config.ts"
@@ -966,6 +969,40 @@ export function Session() {
         dialog.clear()
       }),
     },
+    {
+      title: "Next teammate",
+      value: "team.cycle",
+      keybind: "teammate_cycle",
+      category: "Agent",
+      hidden: true,
+      enabled: !!AgentTeamsTUI.getActiveTeam(),
+      onSelect: (dialog) => {
+        AgentTeamsTUI.cycleTeammate(1)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Previous teammate",
+      value: "team.cycle.reverse",
+      keybind: "teammate_cycle_reverse",
+      category: "Agent",
+      hidden: true,
+      enabled: !!AgentTeamsTUI.getActiveTeam(),
+      onSelect: (dialog) => {
+        AgentTeamsTUI.cycleTeammate(-1)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Task list",
+      value: "team.tasklist",
+      keybind: "task_list_toggle",
+      category: "Agent",
+      enabled: !!AgentTeamsTUI.getActiveTeam(),
+      onSelect: (dialog) => {
+        dialog.push(() => <DialogTaskList />)
+      },
+    },
   ])
 
   const revertInfo = createMemo(() => session()?.revert)
@@ -1201,6 +1238,10 @@ export function Session() {
               </box>
             </Match>
           </Switch>
+        </Show>
+        <Show when={AgentTeamsTUI.getActiveTeam()}>
+          <SplitBorder />
+          <TeamPanel width={30} />
         </Show>
       </box>
     </context.Provider>
