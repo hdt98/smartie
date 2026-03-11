@@ -14,6 +14,7 @@ import { CopilotAuthPlugin } from "./copilot"
 import { gitlabAuthPlugin as GitlabAuthPlugin } from "@gitlab/opencode-gitlab-auth"
 import { GasTownPlugin } from "./gastown"
 import { AgentTeamsPlugin } from "./agentteams"
+import { MayorDispatchPlugin } from "./mayordispatch"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
@@ -27,6 +28,7 @@ export namespace Plugin {
     GitlabAuthPlugin,
     GasTownPlugin,
     AgentTeamsPlugin,
+    MayorDispatchPlugin,
   ]
 
   const state = Instance.state(async () => {
