@@ -13,6 +13,7 @@ import { NamedError } from "@smartie-code/util/error"
 import { CopilotAuthPlugin } from "./copilot"
 import { gitlabAuthPlugin as GitlabAuthPlugin } from "@gitlab/opencode-gitlab-auth"
 import { GasTownPlugin } from "./gastown"
+import { AgentTeamsPlugin } from "./agentteams"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
@@ -20,7 +21,13 @@ export namespace Plugin {
   const BUILTIN = ["smartie-anthropic-auth@0.0.13"]
 
   // Built-in plugins that are directly imported (not installed from npm)
-  const INTERNAL_PLUGINS: PluginInstance[] = [CodexAuthPlugin, CopilotAuthPlugin, GitlabAuthPlugin, GasTownPlugin]
+  const INTERNAL_PLUGINS: PluginInstance[] = [
+    CodexAuthPlugin,
+    CopilotAuthPlugin,
+    GitlabAuthPlugin,
+    GasTownPlugin,
+    AgentTeamsPlugin,
+  ]
 
   const state = Instance.state(async () => {
     const client = createOpencodeClient({
