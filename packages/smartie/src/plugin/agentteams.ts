@@ -107,7 +107,7 @@ export function requestid(input: { session: string; call?: string; target: strin
 }
 
 export function requestrig(input: { session: string; call?: string; target: string }) {
-  return `smartie-${requestid(input)}`.slice(0, 63)
+  return `smartie_${requestid(input).replace(/-/g, "_")}`.slice(0, 63)
 }
 
 export function requestmeta(id: string) {
@@ -277,6 +277,20 @@ async function cleanup(state: TeamState, cwd: string, note: string) {
   await write(state, err ? "cleanup_failed" : "cleaned", err || note)
 }
 
+async function remoteurl(dir: string) {
+  const out = await run(["git", "remote", "get-url", "origin"], dir)
+  if (out.code !== 0) return
+  const url = out.stdout.trim()
+  if (!url) return
+  return url
+}
+
+async function addrequestRig(name: string, dir: string, opts?: { force?: boolean }) {
+  const args = ["gt", "rig", "add", name, "--adopt"]
+  if (opts?.force) args.push("--force")
+  return run(args, dir)
+}
+
 async function provision(input: { cwd: string; session: string; call?: string }) {
   const id = requestid({
     session: input.session,
@@ -292,7 +306,9 @@ async function provision(input: { cwd: string; session: string; call?: string })
   const root = await top(input.cwd)
 
   if (root) {
-    const add = await run(["gt", "rig", "add", rig, root, "--local-repo", root], input.cwd)
+    const url = await remoteurl(root)
+    if (!url) return { error: `request rig creation failed: could not determine origin remote for ${root}` }
+    const add = await run(["gt", "rig", "add", rig, url, "--local-repo", root], input.cwd)
     if (add.code !== 0) return { error: `request rig creation failed: ${reason(add)}` }
     const state: TeamState = {
       id,
@@ -310,7 +326,7 @@ async function provision(input: { cwd: string; session: string; call?: string })
   const boot = await snapshot(input.cwd, id)
   if (boot.error) return { error: `snapshot bootstrap failed: ${boot.error}` }
 
-  const add = await run(["gt", "rig", "add", rig, boot.dir, "--local-repo", boot.dir], input.cwd)
+  const add = await addrequestRig(rig, boot.dir, { force: true })
   if (add.code !== 0) {
     await fs.rm(boot.dir, { recursive: true, force: true })
     return { error: `request rig creation failed: ${reason(add)}` }

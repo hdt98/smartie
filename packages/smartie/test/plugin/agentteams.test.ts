@@ -75,6 +75,14 @@ async function setup() {
       "  echo \"${GT_GIT_ROOT}\"",
       "  exit 0",
       "fi",
+      "if [[ \"$self\" == \"git\" && \"${1:-}\" == \"remote\" && \"${2:-}\" == \"get-url\" && \"${3:-}\" == \"origin\" ]]; then",
+      "  if [[ \"${GT_FAIL:-}\" == \"origin-url\" ]]; then",
+      "    echo 'origin missing' >&2",
+      "    exit 1",
+      "  fi",
+      "  echo \"${GT_REMOTE_URL:-git@github.com:hdt98/smartie.git}\"",
+      "  exit 0",
+      "fi",
       "if [[ \"$self\" == \"git\" && \"${1:-}\" == \"init\" ]]; then",
       "  if [[ \"${GT_FAIL:-}\" == \"snapshot-init\" ]]; then",
       "    echo 'snapshot init failed' >&2",
@@ -101,6 +109,10 @@ async function setup() {
       "if [[ \"$self\" == \"gt\" && \"${1:-}\" == \"rig\" && \"${2:-}\" == \"add\" ]]; then",
       "  if [[ \"${GT_FAIL:-}\" == \"rig-add\" ]]; then",
       "    echo 'rig add failed' >&2",
+      "    exit 1",
+      "  fi",
+      "  if [[ \"${4:-}\" != \"--adopt\" && \"${4:-}\" == /* ]]; then",
+      "    echo \"Error: invalid git URL \\\"${4}\\\": expected a remote URL\" >&2",
       "    exit 1",
       "  fi",
       "  echo 'rig add ok'",
@@ -320,7 +332,8 @@ describe("plugin.agentteams", () => {
         const meta = requestmeta(id)
 
         expect(out.some((line) => line.startsWith(`git rev-parse --show-toplevel`))).toBe(true)
-        expect(out.some((line) => line === `gt rig add ${rid} ${fx.dir} --local-repo ${fx.dir}`)).toBe(true)
+        expect(out.some((line) => line === "git remote get-url origin")).toBe(true)
+        expect(out.some((line) => line === `gt rig add ${rid} git@github.com:hdt98/smartie.git --local-repo ${fx.dir}`)).toBe(true)
         expect(out.some((line) => line.includes("bd create --title Refactor lexer"))).toBe(true)
         expect(out.some((line) => line.includes("bd create --title Refactor parser"))).toBe(true)
         expect(out.some((line) => line === "gt convoy create Refactor the parser stack bd-team.1")).toBe(true)
@@ -370,9 +383,58 @@ describe("plugin.agentteams", () => {
         expect(out.some((line) => line === "git init")).toBe(true)
         expect(out.some((line) => line === "git add -A")).toBe(true)
         expect(out.some((line) => line.startsWith("git commit --allow-empty -m smartie request snapshot"))).toBe(true)
-        expect(out.some((line) => line === `gt rig add ${rid} ${snap} --local-repo ${snap}`)).toBe(true)
+        expect(out.some((line) => line === `gt rig add ${rid} --adopt --force`)).toBe(true)
         expect(result.output).toContain(`Rig: ${rid} (snapshot)`)
         expect(result.output).toContain(`Source: ${snap}`)
+      },
+    })
+  })
+
+  test("git-backed requests adopt the local workspace instead of passing it as a git URL", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    await using fx = await setup()
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        const result = await tool.execute(
+          {
+            goal: "Inspect this workspace",
+            reason: "Need a request rig",
+            tasks: [{ description: "Check workspace", acceptance: "No file changes", targets: ["README.md"] }],
+          },
+          mctx() as any,
+        )
+
+        const out = await lines(fx.log)
+        expect(out.some((line) => line === "git remote get-url origin")).toBe(true)
+        expect(out.some((line) => line === `gt rig add ${requestrig({ session: ctx.sessionID, call: ctx.callID, target: fx.dir })} git@github.com:hdt98/smartie.git --local-repo ${fx.dir}`)).toBe(true)
+        expect(out.some((line) => line.includes(` ${fx.dir} --local-repo ${fx.dir}`))).toBe(false)
+        expect(result.output).toContain("Created Agent Team convoy hq-team.1.")
+      },
+    })
+  })
+
+  test("missing origin remote blocks git-backed request rig provisioning cleanly", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    process.env["GT_FAIL"] = "origin-url"
+    await using fx = await setup()
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        const result = await tool.execute(
+          {
+            goal: "Inspect this workspace",
+            reason: "Need a request rig",
+            tasks: [{ description: "Check workspace", acceptance: "No file changes", targets: ["README.md"] }],
+          },
+          mctx() as any,
+        )
+        expect(result.output).toContain("Agent Teams fallback: request rig provisioning failed.")
+        expect(result.output).toContain(`could not determine origin remote for ${fx.dir}`)
       },
     })
   })
@@ -531,6 +593,7 @@ describe("plugin.agentteams", () => {
     const tmp2 = requesttmp(id2)
     expect(id1).toBe(id2)
     expect(rig1).toBe(rig2)
+    expect(rig1).toMatch(/^smartie_[a-z0-9_]+$/)
     expect(meta1).toBe(meta2)
     expect(tmp1).toBe(tmp2)
   })
