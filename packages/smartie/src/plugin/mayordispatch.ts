@@ -1,3 +1,4 @@
+import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { tool, type Plugin } from "@smartie-code/plugin"
@@ -24,6 +25,10 @@ type ConvoyState = {
   rig?: string
   root: string
   request?: string
+  provider?: string
+  model?: string
+  runtime?: string
+  authPath?: string
 }
 
 const MAX_RETRIES = 3
@@ -86,10 +91,23 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
     branch: string,
     cwd: string,
     rig?: string,
+    context?: {
+      provider?: string
+      model?: string
+      runtime?: string
+      authPath?: string
+    },
   ): Promise<{ ok: boolean; error?: string }> {
     const cmd = ["gt", "sling", "create"]
     if (rig) cmd.push(rig)
-    cmd.push("--bead", beadId, "--branch", branch, "--cmd", "smartie run", "--env", "SMARTIE_AGENT_TEAMS=0")
+    const model = context?.provider && context?.model ? `${context.provider}/${context.model}` : ""
+    const launch = ["smartie", "run"]
+    if (model) launch.push("--model", model)
+    if (context?.runtime) launch.push("--agent", context.runtime)
+    cmd.push("--bead", beadId, "--branch", branch, "--cmd", launch.join(" "), "--env", "SMARTIE_AGENT_TEAMS=0")
+    if (context?.provider) cmd.push("--env", `SMARTIE_LEAD_PROVIDER=${context.provider}`)
+    if (context?.model) cmd.push("--env", `SMARTIE_LEAD_MODEL=${context.model}`)
+    if (context?.authPath) cmd.push("--env", `SMARTIE_AUTH_PATH=${context.authPath}`)
     const sling = await run(cmd, cwd)
     if (sling.code !== 0) return { ok: false, error: reason(sling) }
     return { ok: true }
@@ -99,12 +117,22 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
     await run(["gt", "bead", "update", beadId, "--status", status], cwd)
   }
 
-  async function dispatchBead(bead: BeadStatus, cwd: string, rig?: string): Promise<string | undefined> {
+  async function dispatchBead(
+    bead: BeadStatus,
+    cwd: string,
+    rig?: string,
+    context?: {
+      provider?: string
+      model?: string
+      runtime?: string
+      authPath?: string
+    },
+  ): Promise<string | undefined> {
     const br = await createBranch(bead.id, cwd)
     if (!br.ok) return `Branch creation failed for ${bead.id}: ${br.error}`
     bead.branch = br.branch
 
-    const spawn = await spawnPolecat(bead.id, br.branch, cwd, rig)
+    const spawn = await spawnPolecat(bead.id, br.branch, cwd, rig, context)
     if (!spawn.ok) return `Polecat spawn failed for ${bead.id}: ${spawn.error}`
 
     bead.status = "running"
@@ -122,6 +150,10 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
           rig: tool.schema.string().optional().describe("Request rig name for this convoy."),
           root: tool.schema.string().optional().describe("Request rig root directory."),
           request_id: tool.schema.string().optional().describe("Request ID for metadata linkage."),
+          provider_id: tool.schema.string().optional().describe("Lead provider ID to inherit."),
+          model_id: tool.schema.string().optional().describe("Lead model ID to inherit."),
+          runtime: tool.schema.string().optional().describe("Lead runtime/agent to inherit."),
+          auth_path: tool.schema.string().optional().describe("Shared auth store path."),
         },
         async execute(args, ctx) {
           if (args.rig) {
@@ -130,6 +162,13 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
           }
 
           const root = args.root || input.directory
+          if (args.auth_path) {
+            const has = await fs
+              .access(args.auth_path)
+              .then(() => true)
+              .catch(() => false)
+            if (!has) return `Dispatch failed: auth inheritance path not found at ${args.auth_path}.`
+          }
           const beadList = await run(["gt", "convoy", "beads", args.convoy_id], root)
           if (beadList.code !== 0) return `Dispatch failed: could not list beads for convoy ${args.convoy_id}. ${reason(beadList)}`
 
@@ -144,13 +183,22 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
             rig: args.rig,
             root,
             request: args.request_id,
+            provider: args.provider_id,
+            model: args.model_id,
+            runtime: args.runtime,
+            authPath: args.auth_path,
             beads: ids.map((id) => ({ id, branch: "", attempts: 0, status: "pending" as const, merged: false, conflict: false })),
           }
           convoys.set(args.convoy_id, state)
 
           const errors: string[] = []
           for (const bead of state.beads) {
-            const err = await dispatchBead(bead, state.root, state.rig)
+            const err = await dispatchBead(bead, state.root, state.rig, {
+              provider: state.provider,
+              model: state.model,
+              runtime: state.runtime,
+              authPath: state.authPath,
+            })
             if (err) {
               bead.status = "failed"
               bead.attempts = 1
@@ -189,7 +237,12 @@ export const MayorDispatchPlugin: Plugin = async (input) => {
             await markBead(bead.id, "closed", state.root)
           } else {
             if (bead.attempts < MAX_RETRIES) {
-              const err = await dispatchBead(bead, state.root, state.rig)
+              const err = await dispatchBead(bead, state.root, state.rig, {
+                provider: state.provider,
+                model: state.model,
+                runtime: state.runtime,
+                authPath: state.authPath,
+              })
               if (err) {
                 bead.status = "failed"
                 await markBead(bead.id, "failed", state.root)

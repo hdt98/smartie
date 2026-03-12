@@ -197,6 +197,36 @@ describe("plugin.mayordispatch", () => {
     })
   })
 
+  test("request context is inherited into teammate launch", async () => {
+    await using fx = await setup({ beads: ["bd-m.1"] })
+    const auth = path.join(fx.dir, "auth.json")
+    await Bun.write(auth, "{}")
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        const tool = await dispatchTool()
+        await tool.execute(
+          {
+            convoy_id: "hq-team.1",
+            provider_id: "lead-provider",
+            model_id: "lead-model",
+            runtime: "plan",
+            auth_path: auth,
+          },
+          ctx as any,
+        )
+
+        const out = await lines(fx.log)
+        const slingCall = out.find((l) => l.startsWith("sling create"))
+        expect(slingCall).toBeDefined()
+        expect(slingCall).toContain("--cmd smartie run --model lead-provider/lead-model --agent plan")
+        expect(slingCall).toContain("--env SMARTIE_LEAD_PROVIDER=lead-provider")
+        expect(slingCall).toContain("--env SMARTIE_LEAD_MODEL=lead-model")
+        expect(slingCall).toContain(`--env SMARTIE_AUTH_PATH=${auth}`)
+      },
+    })
+  })
+
   test("branch naming follows bead_<id> pattern", async () => {
     await using fx = await setup({ beads: ["bd-m.1"] })
     await Instance.provide({
@@ -236,6 +266,21 @@ describe("plugin.mayordispatch", () => {
         const tool = await dispatchTool()
         const result = await tool.execute({ convoy_id: "hq-bad", rig: "smartie-rq-x", root: fx.dir }, ctx as any)
         expect(result.output).toContain("request rig smartie-rq-x is unavailable")
+      },
+    })
+  })
+
+  test("missing auth inheritance path rejects dispatch cleanly", async () => {
+    await using fx = await setup()
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        const tool = await dispatchTool()
+        const auth = path.join(fx.dir, "missing", "auth.json")
+        const result = await tool.execute({ convoy_id: "hq-bad", auth_path: auth }, ctx as any)
+        expect(result.output).toContain(`auth inheritance path not found at ${auth}`)
+        const out = await lines(fx.log)
+        expect(out.some((line) => line.startsWith("convoy beads"))).toBe(false)
       },
     })
   })

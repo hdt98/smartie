@@ -4,6 +4,11 @@ import os from "os"
 import path from "path"
 import { tool, type Plugin } from "@smartie-code/plugin"
 import { Process } from "@/util/process"
+import { Provider } from "@/provider/provider"
+import { Auth } from "@/auth"
+import { Bus } from "@/bus"
+import { TuiEvent } from "@/cli/cmd/tui/event"
+import { Global } from "@/global"
 
 type RunResult = {
   code: number
@@ -22,6 +27,10 @@ type TeamState = {
   meta: string
   convoy?: string
   session: string
+  provider?: string
+  model?: string
+  runtime?: string
+  authPath?: string
 }
 
 function enabled() {
@@ -77,6 +86,12 @@ function fallback(phase: string, reason: string) {
   ].join("\n")
 }
 
+function toint(input: string | undefined, fallback: number) {
+  const value = Number(input)
+  if (!Number.isFinite(value) || value < 0) return fallback
+  return Math.floor(value)
+}
+
 function slug(text: string) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
 }
@@ -128,6 +143,55 @@ async function top(dir: string) {
   const root = out.stdout.trim()
   if (!root) return
   return root
+}
+
+async function waitAuth(input: { provider: string }) {
+  const limit = toint(process.env["SMARTIE_AGENT_TEAMS_AUTH_WAIT_MS"], 120000)
+  const step = 500
+  const loops = Math.max(1, Math.ceil(limit / step))
+  for (let i = 0; i < loops; i++) {
+    const auth = await Auth.get(input.provider)
+    if (auth) return auth
+    await Bun.sleep(step)
+  }
+}
+
+async function preflight(ctx: any) {
+  const model = (ctx.extra as any)?.model
+  const provider = typeof model?.providerID === "string" ? model.providerID : ""
+  const modelID = typeof model?.id === "string" ? model.id : typeof model?.modelID === "string" ? model.modelID : ""
+  const runtime = typeof ctx.agent === "string" ? ctx.agent : "build"
+  if (!provider || !modelID) return { error: "lead session provider/model is missing for auth preflight" }
+
+  const known = await Provider.getProvider(provider)
+  let auth = await Auth.get(provider)
+  if (!auth && !known?.key) {
+    await Bus.publish(TuiEvent.ToastShow, {
+      title: "Provider auth required",
+      message: `Connect provider '${provider}' to start Agent Teams`,
+      variant: "warning",
+    })
+    await Bus.publish(TuiEvent.CommandExecute, {
+      command: "provider.connect",
+    })
+    auth = await waitAuth({ provider })
+    if (!auth) return { error: `provider '${provider}' is not authenticated. connect flow did not complete in time` }
+  }
+
+  const authPath = process.env["SMARTIE_AUTH_PATH"] || path.join(Global.Path.data, "auth.json")
+  if (auth) {
+    const has = await fs
+      .access(authPath)
+      .then(() => true)
+      .catch(() => false)
+    if (!has) return { error: `shared auth store not found at ${authPath}` }
+  }
+  return {
+    provider,
+    model: modelID,
+    runtime,
+    authPath: auth ? authPath : "",
+  }
 }
 
 async function write(state: TeamState, status: string, error?: string) {
@@ -295,6 +359,9 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             .describe("Independent sub-tasks for the convoy."),
         },
         async execute(args, ctx) {
+          const auth = await preflight(ctx)
+          if ("error" in auth) return fallback("provider authentication", auth.error)
+
           const ready = await provision({
             cwd: input.directory,
             session: ctx.sessionID,
@@ -302,6 +369,24 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
           })
           if (ready.error) return fallback("request rig provisioning", ready.error)
           const state = ready.state
+          state.provider = auth.provider
+          state.model = auth.model
+          state.runtime = auth.runtime
+          state.authPath = auth.authPath
+          if (auth.authPath) {
+            const hasAuthPath = await fs
+              .access(auth.authPath)
+              .then(() => true)
+              .catch(() => false)
+            if (!hasAuthPath) {
+              await cleanup(state, state.root, "fallback after auth inheritance failure")
+              return fallback("auth inheritance", `shared auth store not found at ${auth.authPath}`)
+            }
+          }
+          if (!auth.authPath && !(await Provider.getProvider(auth.provider))) {
+            await cleanup(state, state.root, "fallback after auth inheritance failure")
+            return fallback("auth inheritance", `provider auth inheritance could not be established for ${auth.provider}`)
+          }
           sessions.set(ctx.sessionID, state)
 
           const created: string[] = []
@@ -363,7 +448,27 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
           }
 
           const dispatch = await run(
-            ["gt", "mayor", "dispatch", "--convoy", convoyID, "--rig", state.rig, "--request", state.id, "--root", state.root],
+            [
+              "gt",
+              "mayor",
+              "dispatch",
+              "--convoy",
+              convoyID,
+              "--rig",
+              state.rig,
+              "--request",
+              state.id,
+              "--root",
+              state.root,
+              "--provider",
+              state.provider,
+              "--model",
+              state.model,
+              "--runtime",
+              state.runtime,
+              "--auth-path",
+              state.authPath,
+            ],
             state.root,
           )
           if (dispatch.code !== 0) {
@@ -376,6 +481,7 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             `Request: ${state.id}`,
             `Rig: ${state.rig} (${state.mode})`,
             `Source: ${state.root}`,
+            `Provider: ${state.provider}/${state.model}`,
             `Cleanup metadata: ${state.meta}`,
             `Reason: ${args.reason}`,
             created.length ? `Beads: ${created.join(", ")}` : "Beads: created",
