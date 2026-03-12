@@ -282,6 +282,7 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
     const requestID = line(output, "Request:") ?? ""
     const rigRaw = line(output, "Rig:") ?? ""
     const rig = rigRaw.split(/\s+\(/)[0] ?? ""
+    const target = line(output, "Target:") ?? input.directory
     const source = line(output, "Source:") ?? input.directory
     const cleanup = line(output, "Cleanup metadata:") ?? ""
     const goal = typeof part.state?.input?.goal === "string" ? part.state.input.goal : ""
@@ -292,7 +293,7 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
       requestID,
       rig,
       source,
-      target: input.directory,
+      target,
       cleanup,
       goal,
       teammates: beadIds.map((id) => ({
@@ -317,14 +318,14 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
       requestID,
       rig,
       source,
-      target: input.directory,
+      target,
     })
     Bus.publish(AgentTeamsTUI.Event.TeamFormed, {
       convoyID,
       requestID,
       rig,
       source,
-      target: input.directory,
+      target,
       cleanup,
       goal,
       teammates: teamState.teammates,
@@ -333,7 +334,7 @@ export const AgentTeamsTUIPlugin: Plugin = async (input) => {
       convoyID,
       requestID,
       rig,
-      target: input.directory,
+      target,
       source,
     })
     teamState.phase = "working"

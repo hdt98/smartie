@@ -9,6 +9,7 @@ import { Auth } from "../../src/auth"
 import { Bus } from "../../src/bus"
 import { TuiEvent } from "../../src/cli/cmd/tui/event"
 import { Global } from "../../src/global"
+import { Question } from "../../src/question"
 import { requestid, requestmeta, requestrig, requesttmp } from "../../src/plugin/agentteams"
 
 const env = { ...process.env }
@@ -352,6 +353,72 @@ describe("plugin.agentteams", () => {
         expect(result.output).toContain(`Cleanup metadata: ${meta}`)
         expect(result.output).toContain("Beads: bd-team.1, bd-team.2")
         expect(result.output).toContain(`Dispatched convoy hq-team.1 to Mayor for rig ${rid}.`)
+      },
+    })
+  })
+
+  test("explicit target overrides current workspace for request rig provisioning", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    await using fx = await setup()
+    const target = path.join(fx.dir, "other")
+    await fs.mkdir(target, { recursive: true })
+    process.env["GT_GIT_ROOT"] = target
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        const out = await tool.execute(
+          {
+            goal: "Inspect target workspace",
+            reason: "Need different repo",
+            target,
+            tasks: [{ description: "Check", acceptance: "Done", targets: ["README.md"] }],
+          },
+          mctx() as any,
+        )
+        const linesOut = await lines(fx.log)
+        const rid = requestrig({ session: ctx.sessionID, call: ctx.callID, target })
+        expect(linesOut.some((line) => line === `gt rig add ${rid} git@github.com:hdt98/smartie.git --local-repo ${target}`)).toBe(true)
+        expect(out.output).toContain(`Target: ${target}`)
+      },
+    })
+  })
+
+  test("ambiguous target asks for confirmation and uses selected workspace", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    await using fx = await setup()
+    const target = path.join(fx.dir, "alt")
+    await fs.mkdir(target, { recursive: true })
+    process.env["GT_GIT_ROOT"] = target
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const asked: any[] = []
+        const unsub = Bus.subscribe(Question.Event.Asked, async (event) => {
+          asked.push(event)
+          await Question.reply({
+            requestID: event.properties.id,
+            answers: [[target]],
+          })
+        })
+        const tool = await teamTool()
+        const out = await tool.execute(
+          {
+            goal: "Inspect another repo",
+            reason: "Could be outside this workspace",
+            tasks: [{ description: "Check", acceptance: "Done", targets: ["../alt"] }],
+          },
+          mctx() as any,
+        )
+        unsub()
+
+        const linesOut = await lines(fx.log)
+        const rid = requestrig({ session: ctx.sessionID, call: ctx.callID, target })
+        expect(asked.length).toBe(1)
+        expect(linesOut.some((line) => line === `gt rig add ${rid} git@github.com:hdt98/smartie.git --local-repo ${target}`)).toBe(true)
+        expect(out.output).toContain(`Target: ${target}`)
       },
     })
   })

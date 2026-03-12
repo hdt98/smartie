@@ -9,6 +9,7 @@ import { Auth } from "@/auth"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import { Global } from "@/global"
+import { Question } from "@/question"
 
 type RunResult = {
   code: number
@@ -194,6 +195,61 @@ async function preflight(ctx: any) {
   }
 }
 
+function abs(cwd: string, dir: string) {
+  return path.isAbsolute(dir) ? path.normalize(dir) : path.resolve(cwd, dir)
+}
+
+function outside(cwd: string, dir: string) {
+  const root = path.resolve(cwd)
+  const target = abs(cwd, dir)
+  if (target === root) return false
+  return !target.startsWith(root + path.sep)
+}
+
+function unsure(goal: string, reason: string) {
+  const text = `${goal}\n${reason}`.toLowerCase()
+  return ["another repo", "different repo", "different folder", "other folder", "outside this repo", "outside this workspace"].some((item) =>
+    text.includes(item),
+  )
+}
+
+async function pick(input: {
+  cwd: string
+  goal: string
+  reason: string
+  tasks: { targets: string[] }[]
+  target?: string
+  ctx: any
+}) {
+  if (input.target?.trim()) return { dir: abs(input.cwd, input.target.trim()), asked: false as const }
+  const need = input.tasks.some((task) => task.targets.some((target) => outside(input.cwd, target))) || unsure(input.goal, input.reason)
+  if (!need) return { dir: input.cwd, asked: false as const }
+
+  const answers = await Question.ask({
+    sessionID: input.ctx.sessionID,
+    tool: {
+      messageID: input.ctx.messageID,
+      callID: input.ctx.callID,
+    },
+    questions: [
+      {
+        header: "Team Target",
+        question: `Use current workspace as Agent Team target?\nCurrent: ${input.cwd}`,
+        options: [
+          {
+            label: "Use current workspace",
+            description: "Run Agent Teams in the current workspace",
+          },
+        ],
+        custom: true,
+      },
+    ],
+  }).catch(() => [] as string[][])
+  const selected = answers[0]?.[0]?.trim() ?? ""
+  if (!selected || selected === "Use current workspace") return { dir: input.cwd, asked: true as const }
+  return { dir: abs(input.cwd, selected), asked: true as const }
+}
+
 async function write(state: TeamState, status: string, error?: string) {
   const next = {
     id: state.id,
@@ -373,13 +429,36 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             )
             .min(1)
             .describe("Independent sub-tasks for the convoy."),
+          target: tool.schema
+            .string()
+            .optional()
+            .describe("Optional explicit target repo/folder path for Agent Teams."),
         },
         async execute(args, ctx) {
           const auth = await preflight(ctx)
           if ("error" in auth) return fallback("provider authentication", auth.error)
 
-          const ready = await provision({
+          const target = await pick({
             cwd: input.directory,
+            goal: args.goal,
+            reason: args.reason,
+            tasks: args.tasks,
+            target: args.target,
+            ctx,
+          })
+          const exists = await fs
+            .stat(target.dir)
+            .then((item) => item.isDirectory())
+            .catch(() => false)
+          if (!exists) return fallback("target resolution", `selected target does not exist: ${target.dir}`)
+          await Bus.publish(TuiEvent.ToastShow, {
+            title: "Agent Team target",
+            message: `Using target workspace: ${target.dir}`,
+            variant: "info",
+          })
+
+          const ready = await provision({
+            cwd: target.dir,
             session: ctx.sessionID,
             call: ctx.callID,
           })
@@ -496,6 +575,7 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             `Created Agent Team convoy ${convoyID}.`,
             `Request: ${state.id}`,
             `Rig: ${state.rig} (${state.mode})`,
+            `Target: ${state.target}`,
             `Source: ${state.root}`,
             `Provider: ${state.provider}/${state.model}`,
             `Cleanup metadata: ${state.meta}`,
