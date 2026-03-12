@@ -356,6 +356,32 @@ describe("plugin.agentteams", () => {
     })
   })
 
+  test("convoy creation command is compatible with gt binaries without --session", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    await using fx = await setup()
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        await tool.execute(
+          {
+            goal: "Split work safely",
+            reason: "parallel tasks",
+            tasks: [{ description: "One", acceptance: "Done", targets: ["a.ts"] }],
+          },
+          mctx() as any,
+        )
+
+        const out = await lines(fx.log)
+        const cmd = out.find((line) => line.startsWith("gt convoy create "))
+        expect(cmd).toBeDefined()
+        expect(cmd).toContain("Split work safely bd-team.1")
+        expect(cmd).not.toContain("--session")
+      },
+    })
+  })
+
   test("non-git targets bootstrap snapshot and provision request rig", async () => {
     process.env["SMARTIE_AGENT_TEAMS"] = "1"
     process.env["GT_GIT_MODE"] = "nogit"
