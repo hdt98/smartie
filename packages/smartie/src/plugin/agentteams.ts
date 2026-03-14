@@ -481,6 +481,97 @@ async function rigroot(name: string, cwd: string) {
   return { root: has ? mayor : rig }
 }
 
+type ApplyBackResult = {
+  modified: string[]
+  added: string[]
+  deleted: string[]
+  errors: string[]
+}
+
+async function computeDiff(snapshot: string, target: string): Promise<ApplyBackResult> {
+  const result: ApplyBackResult = { modified: [], added: [], deleted: [], errors: [] }
+
+  const listFiles = await run(["git", "ls-files", "-z"], snapshot)
+  if (listFiles.code !== 0) {
+    result.errors.push(`failed to list snapshot files: ${reason(listFiles)}`)
+    return result
+  }
+
+  const snapshotFiles = listFiles.stdout.split("\0").filter(Boolean)
+  const snapshotSet = new Set(snapshotFiles)
+
+  for (const file of snapshotFiles) {
+    const snapPath = path.join(snapshot, file)
+    const targetPath = path.join(target, file)
+
+    const targetExists = await fs.access(targetPath).then(() => true).catch(() => false)
+    if (!targetExists) {
+      result.added.push(file)
+      continue
+    }
+
+    const snapContent = await fs.readFile(snapPath)
+    const targetContent = await fs.readFile(targetPath)
+    if (snapContent.toString("base64") !== targetContent.toString("base64")) {
+      result.modified.push(file)
+    }
+  }
+
+  try {
+    const targetFiles = await fs.readdir(target, { recursive: true })
+    for (const file of targetFiles) {
+      if (typeof file === "string" && !snapshotSet.has(file)) {
+        result.deleted.push(file)
+      }
+    }
+  } catch {
+    // Target may not exist or be readable
+  }
+
+  return result
+}
+
+async function applyBack(snapshot: string, target: string, diff: ApplyBackResult): Promise<string> {
+  const errors: string[] = []
+
+  for (const file of diff.added) {
+    const snapPath = path.join(snapshot, file)
+    const targetPath = path.join(target, file)
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.cp(snapPath, targetPath).catch((e) => errors.push(`failed to copy added file ${file}: ${e}`))
+  }
+
+  for (const file of diff.modified) {
+    const snapPath = path.join(snapshot, file)
+    const targetPath = path.join(target, file)
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.cp(snapPath, targetPath).catch((e) => errors.push(`failed to copy modified file ${file}: ${e}`))
+  }
+
+  return errors.length ? errors.join("; ") : ""
+}
+
+async function promptDeletions(files: string[]): Promise<boolean> {
+  if (!files.length) return true
+
+  await Bus.publish(TuiEvent.ToastShow, {
+    title: "Files deleted in snapshot",
+    message: `${files.length} file(s) were deleted. Approve to remove from target: ${files.join(", ")}`,
+    variant: "warning",
+  })
+
+  return false
+}
+
+async function applyDeletions(target: string, files: string[]): Promise<string> {
+  const errors: string[] = []
+  for (const file of files) {
+    const targetPath = path.join(target, file)
+    await fs.rm(targetPath).catch((e) => errors.push(`failed to delete ${file}: ${e}`))
+  }
+  return errors.length ? errors.join("; ") : ""
+}
+
 async function addrequestRig(name: string, dir: string, opts?: { force?: boolean }) {
   const args = ["gt", "rig", "add", name, "--adopt"]
   if (opts?.force) args.push("--force")
@@ -773,27 +864,43 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
       if (!state) return
 
       if (state.mode === "snapshot" && state.snapshot && state.target) {
-        const changed = await getChangedFiles(state.snapshot, state.root)
-        const hasChanges = changed.modified.length > 0 || changed.added.length > 0 || changed.deleted.length > 0
+        const diff = await computeDiff(state.snapshot, state.target)
+        if (diff.errors.length) {
+          await Bus.publish(TuiEvent.ToastShow, {
+            title: "Apply-back error",
+            message: diff.errors.join("; "),
+            variant: "error",
+          })
+        }
 
-        if (hasChanges) {
-          const applyErrors = await applyBack(state, changed)
-          let deletionErrors = ""
-          if (changed.deleted.length > 0) {
-            const approved = await askDeletionApproval(state.session, changed.deleted)
-            if (approved) {
-              deletionErrors = await applyDeletions(state, changed.deleted)
+        const applyErrors = await applyBack(state.snapshot, state.target, diff)
+        if (applyErrors) {
+          await Bus.publish(TuiEvent.ToastShow, {
+            title: "Apply-back error",
+            message: applyErrors,
+            variant: "error",
+          })
+        }
+
+        if (diff.deleted.length) {
+          const approved = await promptDeletions(diff.deleted)
+          if (approved) {
+            const deleteErrors = await applyDeletions(state.target, diff.deleted)
+            if (deleteErrors) {
+              await Bus.publish(TuiEvent.ToastShow, {
+                title: "Deletion error",
+                message: deleteErrors,
+                variant: "error",
+              })
             }
           }
-          const totalErrors = [applyErrors, deletionErrors].filter(Boolean).join("; ")
-          if (totalErrors) {
-            await write(state, "apply_back_partial", totalErrors)
-          } else {
-            await write(state, "applied_back", `modified: ${changed.modified.length}, added: ${changed.added.length}, deleted: ${changed.deleted.length}`)
-          }
-        } else {
-          await write(state, "no_changes", "no file changes detected")
         }
+
+        await Bus.publish(TuiEvent.ToastShow, {
+          title: "Apply-back complete",
+          message: `Applied ${diff.added.length} added, ${diff.modified.length} modified, ${diff.deleted.length} deleted (${diff.deleted.length ? "awaiting approval" : "none"}) file(s)`,
+          variant: "success",
+        })
       }
 
       await cleanup(state, input.directory, "convoy complete")

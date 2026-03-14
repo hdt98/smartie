@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { describeRoute, resolver, validator } from "hono-openapi"
 import z from "zod"
 import { Workspace } from "../../control-plane/workspace"
+import { Worktree } from "../../worktree"
 import { Instance } from "../../project/instance"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
@@ -60,6 +61,34 @@ export const WorkspaceRoutes = lazy(() =>
       }),
       async (c) => {
         return c.json(Workspace.list(Instance.project))
+      },
+    )
+    .post(
+      "/verify",
+      describeRoute({
+        summary: "Verify Git target",
+        description: "Verify a Git target (branch) can be used to provision a worktree.",
+        operationId: "experimental.workspace.verify",
+        responses: {
+          200: {
+            description: "Verification result",
+            content: {
+              "application/json": {
+                schema: resolver(Worktree.VerifyResult),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "json",
+        Worktree.verify.schema,
+      ),
+      async (c) => {
+        const body = c.req.valid("json")
+        const result = await Worktree.verify(body)
+        return c.json(result)
       },
     )
     .delete(
