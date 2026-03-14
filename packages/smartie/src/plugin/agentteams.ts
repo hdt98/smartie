@@ -101,6 +101,13 @@ function hash(text: string) {
   return crypto.createHash("sha1").update(text).digest("hex").slice(0, 8)
 }
 
+function remote(text: string) {
+  const input = text.trim()
+  if (!input) return false
+  if (/^(https?:\/\/|ssh:\/\/|git:\/\/)/i.test(input)) return true
+  return /^[a-z0-9._-]+@[a-z0-9._-]+:.+/i.test(input)
+}
+
 export function requestid(input: { session: string; call?: string; target: string }) {
   const sid = slug(input.session).slice(0, 16) || "session"
   const cid = slug(input.call ?? "call").slice(0, 16) || "call"
@@ -221,7 +228,11 @@ async function pick(input: {
   target?: string
   ctx: any
 }) {
-  if (input.target?.trim()) return { dir: abs(input.cwd, input.target.trim()), asked: false as const }
+  if (input.target?.trim()) {
+    const target = input.target.trim()
+    if (remote(target)) return { dir: target, asked: false as const }
+    return { dir: abs(input.cwd, target), asked: false as const }
+  }
   const need = input.tasks.some((task) => task.targets.some((target) => outside(input.cwd, target))) || unsure(input.goal, input.reason)
   if (!need) return { dir: input.cwd, asked: false as const }
 
@@ -315,6 +326,117 @@ async function snapshot(target: string, id: string) {
   return { dir }
 }
 
+type ChangedFiles = {
+  modified: string[]
+  added: string[]
+  deleted: string[]
+}
+
+async function getChangedFiles(snapshot: string, root: string): Promise<ChangedFiles> {
+  const modified: string[] = []
+  const added: string[] = []
+  const deleted: string[] = []
+
+  const snapshotFiles = await fs.readdir(snapshot, { recursive: true, withFileTypes: true }).catch(() => [])
+  const snapshotPaths = new Set<string>()
+  for (const entry of snapshotFiles) {
+    if (entry.isFile()) {
+      const rel = path.relative(snapshot, path.join(entry.parent?.path ?? snapshot, entry.name))
+      snapshotPaths.add(rel)
+    }
+  }
+
+  const rootFiles = await fs.readdir(root, { recursive: true, withFileTypes: true }).catch(() => [])
+  const rootPaths = new Set<string>()
+  for (const entry of rootFiles) {
+    if (entry.isFile()) {
+      const rel = path.relative(root, path.join(entry.parent?.path ?? root, entry.name))
+      if (!rel.startsWith(".git") && !rel.startsWith("mayor") && !rel.startsWith(".worktrees")) {
+        rootPaths.add(rel)
+      }
+    }
+  }
+
+  for (const file of rootPaths) {
+    if (!snapshotPaths.has(file)) {
+      added.push(file)
+    } else {
+      const snapshotPath = path.join(snapshot, file)
+      const rootPath = path.join(root, file)
+      const snapshotExists = await fs.stat(snapshotPath).then(() => true).catch(() => false)
+      const rootExists = await fs.stat(rootPath).then(() => true).catch(() => false)
+      if (snapshotExists && rootExists) {
+        const snapshotContent = await Bun.file(snapshotPath).text().catch(() => "")
+        const rootContent = await Bun.file(rootPath).text().catch(() => "")
+        if (snapshotContent !== rootContent) {
+          modified.push(file)
+        }
+      }
+    }
+  }
+
+  for (const file of snapshotPaths) {
+    if (!rootPaths.has(file)) {
+      deleted.push(file)
+    }
+  }
+
+  return { modified, added, deleted }
+}
+
+async function applyBack(state: TeamState, changed: ChangedFiles): Promise<string> {
+  if (!state.snapshot || !state.target) return ""
+
+  const errors: string[] = []
+
+  for (const file of changed.modified) {
+    const src = path.join(state.root, file)
+    const dst = path.join(state.target, file)
+    const dir = path.dirname(dst)
+    await fs.mkdir(dir, { recursive: true }).catch(() => {})
+    await fs.copyFile(src, dst).catch((e) => errors.push(`failed to copy modified ${file}: ${e}`))
+  }
+
+  for (const file of changed.added) {
+    const src = path.join(state.root, file)
+    const dst = path.join(state.target, file)
+    const dir = path.dirname(dst)
+    await fs.mkdir(dir, { recursive: true }).catch(() => {})
+    await fs.copyFile(src, dst).catch((e) => errors.push(`failed to copy new ${file}: ${e}`))
+  }
+
+  return errors.join("; ")
+}
+
+async function askDeletionApproval(sessionID: string, deletions: string[]): Promise<boolean> {
+  const answers = await Question.ask({
+    sessionID,
+    questions: [
+      {
+        header: "Apply Deletions",
+        question: `The following files will be deleted from the original target:\n${deletions.join("\n")}\n\nApply these deletions?`,
+        options: [
+          { label: "Apply deletions", description: "Delete the listed files from the original target" },
+          { label: "Skip deletions", description: "Keep the files, do not delete them" },
+        ],
+        custom: false,
+      },
+    ],
+  }).catch(() => [])
+  const answer = answers[0]?.[0]?.trim() ?? ""
+  return answer === "Apply deletions"
+}
+
+async function applyDeletions(state: TeamState, deletions: string[]): Promise<string> {
+  if (!state.target) return ""
+  const errors: string[] = []
+  for (const file of deletions) {
+    const dst = path.join(state.target, file)
+    await fs.rm(dst).catch((e) => errors.push(`failed to delete ${file}: ${e}`))
+  }
+  return errors.join("; ")
+}
+
 async function cleanup(state: TeamState, cwd: string, note: string) {
   const rid = await run(["gt", "rig", "remove", state.rig], cwd)
   let err = rid.code === 0 ? "" : `rig remove failed: ${reason(rid)}`
@@ -341,13 +463,63 @@ async function remoteurl(dir: string) {
   return url
 }
 
+async function rigroot(name: string, cwd: string) {
+  const out = await run(["gt", "rig", "status", name], cwd)
+  if (out.code !== 0) return { error: reason(out) }
+  const line = out.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("Path:"))
+  if (!line) return { error: `request rig status missing Path for ${name}` }
+  const rig = line.replace(/^Path:\s*/, "").trim()
+  if (!rig) return { error: `request rig status returned empty Path for ${name}` }
+  const mayor = path.join(rig, "mayor", "rig")
+  const has = await fs
+    .stat(mayor)
+    .then((item) => item.isDirectory())
+    .catch(() => false)
+  return { root: has ? mayor : rig }
+}
+
 async function addrequestRig(name: string, dir: string, opts?: { force?: boolean }) {
   const args = ["gt", "rig", "add", name, "--adopt"]
   if (opts?.force) args.push("--force")
   return run(args, dir)
 }
 
-async function provision(input: { cwd: string; session: string; call?: string }) {
+async function provision(input: { cwd: string; session: string; call?: string; host: string }) {
+  if (remote(input.cwd)) {
+    const id = requestid({
+      session: input.session,
+      call: input.call,
+      target: input.cwd,
+    })
+    const rig = requestrig({
+      session: input.session,
+      call: input.call,
+      target: input.cwd,
+    })
+    const meta = requestmeta(id)
+    const add = await run(["gt", "rig", "add", rig, input.cwd], input.host)
+    if (add.code !== 0) return { error: `request rig creation failed: ${reason(add)}` }
+    const root = await rigroot(rig, input.host)
+    if ("error" in root) {
+      await run(["gt", "rig", "remove", rig], input.host)
+      return { error: `request rig creation failed: ${root.error}` }
+    }
+    const state: TeamState = {
+      id,
+      rig,
+      mode: "git",
+      target: input.cwd,
+      root: root.root,
+      meta,
+      session: input.session,
+    }
+    await write(state, "provisioned")
+    return { state }
+  }
+
   const id = requestid({
     session: input.session,
     call: input.call,
@@ -366,12 +538,17 @@ async function provision(input: { cwd: string; session: string; call?: string })
     if (!url) return { error: `request rig creation failed: could not determine origin remote for ${root}` }
     const add = await run(["gt", "rig", "add", rig, url, "--local-repo", root], input.cwd)
     if (add.code !== 0) return { error: `request rig creation failed: ${reason(add)}` }
+    const rr = await rigroot(rig, input.cwd)
+    if ("error" in rr) {
+      await run(["gt", "rig", "remove", rig], input.cwd)
+      return { error: `request rig creation failed: ${rr.error}` }
+    }
     const state: TeamState = {
       id,
       rig,
       mode: "git",
       target: input.cwd,
-      root,
+      root: rr.root,
       meta,
       session: input.session,
     }
@@ -387,7 +564,6 @@ async function provision(input: { cwd: string; session: string; call?: string })
     await fs.rm(boot.dir, { recursive: true, force: true })
     return { error: `request rig creation failed: ${reason(add)}` }
   }
-
   const state: TeamState = {
     id,
     rig,
@@ -446,11 +622,13 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             target: args.target,
             ctx,
           })
-          const exists = await fs
-            .stat(target.dir)
-            .then((item) => item.isDirectory())
-            .catch(() => false)
-          if (!exists) return fallback("target resolution", `selected target does not exist: ${target.dir}`)
+          if (!remote(target.dir)) {
+            const exists = await fs
+              .stat(target.dir)
+              .then((item) => item.isDirectory())
+              .catch(() => false)
+            if (!exists) return fallback("target resolution", `selected target does not exist: ${target.dir}`)
+          }
           await Bus.publish(TuiEvent.ToastShow, {
             title: "Agent Team target",
             message: `Using target workspace: ${target.dir}`,
@@ -461,6 +639,7 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
             cwd: target.dir,
             session: ctx.sessionID,
             call: ctx.callID,
+            host: input.directory,
           })
           if (ready.error) return fallback("request rig provisioning", ready.error)
           const state = ready.state
@@ -592,6 +771,31 @@ export const AgentTeamsPlugin: Plugin = async (input) => {
       if (!id) return
       const state = convoys.get(id)
       if (!state) return
+
+      if (state.mode === "snapshot" && state.snapshot && state.target) {
+        const changed = await getChangedFiles(state.snapshot, state.root)
+        const hasChanges = changed.modified.length > 0 || changed.added.length > 0 || changed.deleted.length > 0
+
+        if (hasChanges) {
+          const applyErrors = await applyBack(state, changed)
+          let deletionErrors = ""
+          if (changed.deleted.length > 0) {
+            const approved = await askDeletionApproval(state.session, changed.deleted)
+            if (approved) {
+              deletionErrors = await applyDeletions(state, changed.deleted)
+            }
+          }
+          const totalErrors = [applyErrors, deletionErrors].filter(Boolean).join("; ")
+          if (totalErrors) {
+            await write(state, "apply_back_partial", totalErrors)
+          } else {
+            await write(state, "applied_back", `modified: ${changed.modified.length}, added: ${changed.added.length}, deleted: ${changed.deleted.length}`)
+          }
+        } else {
+          await write(state, "no_changes", "no file changes detected")
+        }
+      }
+
       await cleanup(state, input.directory, "convoy complete")
       convoys.delete(id)
       if (sessions.get(state.session)?.id === state.id) sessions.delete(state.session)

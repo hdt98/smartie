@@ -107,6 +107,19 @@ async function setup() {
       "  echo '[main 1] snapshot'",
       "  exit 0",
       "fi",
+      "if [[ \"$self\" == \"git\" && \"${1:-}\" == \"rev-parse\" && \"${2:-}\" == \"HEAD\" ]]; then",
+      "  echo 'abc1234'",
+      "  exit 0",
+      "fi",
+      "if [[ \"$self\" == \"git\" && \"${1:-}\" == \"diff\" ]]; then",
+      "  if [[ \"${GT_DIFF:-}\" == \"empty\" ]]; then",
+      "    exit 0",
+      "  fi",
+      "  echo -e 'M\\tmodified.txt'",
+      "  echo -e 'A\\tnewfile.txt'",
+      "  echo -e 'D\\tdeleted.txt'",
+      "  exit 0",
+      "fi",
       "if [[ \"$self\" == \"gt\" && \"${1:-}\" == \"rig\" && \"${2:-}\" == \"add\" ]]; then",
       "  if [[ \"${GT_FAIL:-}\" == \"rig-add\" ]]; then",
       "    echo 'rig add failed' >&2",
@@ -117,6 +130,15 @@ async function setup() {
       "    exit 1",
       "  fi",
       "  echo 'rig add ok'",
+      "  exit 0",
+      "fi",
+      "if [[ \"$self\" == \"gt\" && \"${1:-}\" == \"rig\" && \"${2:-}\" == \"status\" ]]; then",
+      "  if [[ \"${GT_FAIL:-}\" == \"rig-status\" ]]; then",
+      "    echo 'rig missing' >&2",
+      "    exit 1",
+      "  fi",
+      "  echo \"${3:-}\"",
+      "  echo \"  Path: ${GT_RIG_PATH:-$PWD}\"",
       "  exit 0",
       "fi",
       "if [[ \"$self\" == \"gt\" && \"${1:-}\" == \"rig\" && \"${2:-}\" == \"remove\" ]]; then",
@@ -179,6 +201,7 @@ async function setup() {
   process.env.PATH = `${bin}:${process.env.PATH ?? ""}`
   process.env.GT_LOG = log
   process.env.GT_COUNT = count
+  process.env.GT_RIG_PATH = tmp.path
   if (!process.env.GT_GIT_MODE) process.env.GT_GIT_MODE = "git"
   if (!process.env.GT_GIT_ROOT) process.env.GT_GIT_ROOT = tmp.path
   return { dir: tmp.path, log, [Symbol.asyncDispose]: tmp[Symbol.asyncDispose].bind(tmp) }
@@ -357,6 +380,49 @@ describe("plugin.agentteams", () => {
     })
   })
 
+  test("remote git targets provision request rig directly from remote URL", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    await using fx = await setup()
+    const target = "git@github.com:hdt98/smartie-remote.git"
+    const rig = path.join(fx.dir, "remote-rig")
+    await fs.mkdir(rig, { recursive: true })
+    process.env["GT_RIG_PATH"] = rig
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        const result = await tool.execute(
+          {
+            goal: "Refactor the parser stack",
+            reason: "Independent parser modules can be split safely",
+            target,
+            tasks: [{ description: "Refactor lexer", acceptance: "Lexer passes", targets: ["src/lexer.ts"] }],
+          },
+          mctx() as any,
+        )
+
+        const out = await lines(fx.log)
+        const rid = requestrig({ session: ctx.sessionID, call: ctx.callID, target })
+        const id = requestid({ session: ctx.sessionID, call: ctx.callID, target })
+
+        expect(out.some((line) => line === "git rev-parse --show-toplevel")).toBe(false)
+        expect(out.some((line) => line === "git remote get-url origin")).toBe(false)
+        expect(out.some((line) => line === `gt rig add ${rid} ${target}`)).toBe(true)
+        expect(
+          out.some(
+            (line) =>
+              line ===
+              `gt mayor dispatch --convoy hq-team.1 --rig ${rid} --request ${id} --root ${rig} --provider lead-test --model lead-model --runtime build --auth-path ${path.join(Global.Path.data, "auth.json")}`,
+          ),
+        ).toBe(true)
+        expect(result.output).toContain(`Target: ${target}`)
+        expect(result.output).toContain(`Rig: ${rid} (git)`)
+        expect(result.output).toContain(`Source: ${rig}`)
+      },
+    })
+  })
+
   test("explicit target overrides current workspace for request rig provisioning", async () => {
     process.env["SMARTIE_AGENT_TEAMS"] = "1"
     await using fx = await setup()
@@ -479,6 +545,84 @@ describe("plugin.agentteams", () => {
         expect(out.some((line) => line === `gt rig add ${rid} --adopt --force`)).toBe(true)
         expect(result.output).toContain(`Rig: ${rid} (snapshot)`)
         expect(result.output).toContain(`Source: ${snap}`)
+      },
+    })
+  })
+
+  test("snapshot mode computes changed files and applies back after convoy merge", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    process.env["GT_GIT_MODE"] = "nogit"
+    process.env["GT_DIFF"] = "empty"
+    await using fx = await setup()
+    await Bun.write(path.join(fx.dir, "note.txt"), "hello")
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        await tool.execute(
+          {
+            goal: "Split the migration work",
+            reason: "Work is parallelizable",
+            tasks: [{ description: "One", acceptance: "Done", targets: ["a.ts"] }],
+          },
+          mctx() as any,
+        )
+        await Plugin.trigger(
+          "tool.execute.after",
+          {
+            tool: "mayor_convoy_merge",
+            sessionID: ctx.sessionID,
+            callID: "call-merge",
+            args: { convoy_id: "hq-team.1" },
+          } as any,
+          {} as any,
+        )
+
+        const out = await lines(fx.log)
+        expect(out.some((line) => line.startsWith("gt rig remove"))).toBe(true)
+      },
+    })
+  })
+
+  test("snapshot mode prompts for deletion approval when files are deleted", async () => {
+    process.env["SMARTIE_AGENT_TEAMS"] = "1"
+    process.env["GT_GIT_MODE"] = "nogit"
+    await using fx = await setup()
+    await Bun.write(path.join(fx.dir, "note.txt"), "hello")
+    await Instance.provide({
+      directory: fx.dir,
+      fn: async () => {
+        await seed()
+        const tool = await teamTool()
+        await tool.execute(
+          {
+            goal: "Split the migration work",
+            reason: "Work is parallelizable",
+            tasks: [{ description: "One", acceptance: "Done", targets: ["a.ts"] }],
+          },
+          mctx() as any,
+        )
+
+        const unsub = Bus.subscribe(Question.Event.Asked, async (event) => {
+          expect(event.properties.questions[0]?.header).toBe("Apply Deletions")
+          await Question.reply({
+            requestID: event.properties.id,
+            answers: [["Skip deletions"]],
+          })
+        })
+
+        await Plugin.trigger(
+          "tool.execute.after",
+          {
+            tool: "mayor_convoy_merge",
+            sessionID: ctx.sessionID,
+            callID: "call-merge",
+            args: { convoy_id: "hq-team.1" },
+          } as any,
+          {} as any,
+        )
+        unsub()
       },
     })
   })
