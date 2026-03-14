@@ -28,3 +28,9 @@ opencode-dev
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Gas Town (added by gt)
+.runtime/
+.claude/
+.logs/
+__pycache__/

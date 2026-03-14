@@ -80,6 +80,29 @@ export namespace Worktree {
 
   export type ResetInput = z.infer<typeof ResetInput>
 
+  export const VerifyInput = z
+    .object({
+      branch: z.string(),
+    })
+    .meta({
+      ref: "WorktreeVerifyInput",
+    })
+
+  export type VerifyInput = z.infer<typeof VerifyInput>
+
+  export const VerifyResult = z
+    .object({
+      exists: z.boolean(),
+      branch: z.string(),
+      canCreateWorktree: z.boolean(),
+      directory: z.string().nullable(),
+    })
+    .meta({
+      ref: "WorktreeVerifyResult",
+    })
+
+  export type VerifyResult = z.infer<typeof VerifyResult>
+
   export const NotGitError = NamedError.create(
     "WorktreeNotGitError",
     z.object({
@@ -667,5 +690,32 @@ export namespace Worktree {
     queueStartScripts(worktreePath, { projectID })
 
     return true
+  })
+
+  export const verify = fn(VerifyInput, async (input) => {
+    if (Instance.project.vcs !== "git") {
+      throw new NotGitError({ message: "Worktrees are only supported for git projects" })
+    }
+
+    const root = path.join(Global.Path.data, "worktree", Instance.project.id)
+    const branch = input.branch.startsWith("refs/heads/") ? input.branch : `refs/heads/${input.branch}`
+
+    const branchCheck = await git(["show-ref", "--verify", "--quiet", branch], {
+      cwd: Instance.worktree,
+    })
+    const branchExists = branchCheck.exitCode === 0
+
+    const name = input.branch.replace(/^refs\/heads\//, "").replace(/^smartie\//, "")
+    const directory = path.join(root, name)
+    const directoryExists = await exists(directory)
+
+    const canCreate = !directoryExists
+
+    return {
+      exists: branchExists,
+      branch: input.branch,
+      canCreateWorktree: canCreate,
+      directory: canCreate ? directory : null,
+    }
   })
 }
